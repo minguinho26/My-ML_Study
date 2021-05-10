@@ -96,7 +96,7 @@ class Detector(tf.keras.Model):
         # RoI Pooling : H*W(7*7)에 맞게 입력 특성맵을 pooling. RoI에 해당하는 영역을 7*7로 Pooling한다. 
         self.RoI_Pooling_Layer = RoiPoolingLayer(7) # Pooling 이후 크기를 7*7*512로 만든다. -> (1,num_roi,7,7,512)
         self.Flatten_layer = tf.keras.layers.Flatten() # num_roi*7*7*512개의 텐서가 일렬로 나열됨
-        self.Fully_Connected = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다.
+        self.Fully_Connected = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
         self.Classify_layer = tf.keras.layers.Dense(21, activation='softmax', kernel_initializer = Classify_layer_initializer, name = "output_1")
         self.Reg_layer = tf.keras.layers.Dense(84, activation= None, kernel_initializer = Box_regression_layer_initializer, name = "output_2")
     

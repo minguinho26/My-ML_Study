@@ -96,7 +96,8 @@ class Detector(tf.keras.Model):
         # RoI Pooling : H*W(7*7)에 맞게 입력 특성맵을 pooling. RoI에 해당하는 영역을 7*7로 Pooling한다. 
         self.RoI_Pooling_Layer = RoiPoolingLayer(7) # Pooling 이후 크기를 7*7*512로 만든다. -> (1,num_roi,7,7,512)
         self.Flatten_layer = tf.keras.layers.Flatten() # num_roi*7*7*512개의 텐서가 일렬로 나열됨
-        self.Fully_Connected = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
+        self.Fully_Connected_1 = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
+        self.Fully_Connected_2 = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
         self.Classify_layer = tf.keras.layers.Dense(21, activation='softmax', kernel_initializer = Classify_layer_initializer, name = "output_1")
         self.Reg_layer = tf.keras.layers.Dense(84, activation= None, kernel_initializer = Box_regression_layer_initializer, name = "output_2")
     
@@ -135,7 +136,8 @@ class Detector(tf.keras.Model):
 
         for i in range(0, len(flatten_perRoI)):
             flatten_output = flatten_perRoI[i] # flatten된걸 하나씩 꺼냄
-            Fully_Connected_output = self.Fully_Connected(flatten_output) # FCs로 만들기
+            Fully_Connected_output = self.Fully_Connected_1(flatten_output)
+            Fully_Connected_output = self.Fully_Connected_2(Fully_Connected_output)
             # 객체 분류 레이어, 박스 회귀 레이어
             cls_output = self.Classify_layer(Fully_Connected_output) 
             reg_output = self.Reg_layer(Fully_Connected_output)
@@ -194,7 +196,8 @@ class Detector(tf.keras.Model):
             tape.watch(self.conv5_1.variables)
             tape.watch(self.conv5_2.variables)
             tape.watch(self.conv5_3.variables)
-            tape.watch(self.Fully_Connected.variables)
+            tape.watch(self.Fully_Connected_1.variables)
+            tape.watch(self.Fully_Connected_2.variables)
 
             if cls_reg_boolean == 0:
                 tape.watch(self.Classify_layer.variables)
@@ -203,9 +206,9 @@ class Detector(tf.keras.Model):
 
             
             if cls_reg_boolean == 0:
-                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
+                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1],self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
             else:
-                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
+                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
 
         return g
 
@@ -217,9 +220,9 @@ class Detector(tf.keras.Model):
                 Loss = Loss_list[i]
                 # Detector는 로스 하나하나 적용함
                 g_cls = self.get_grad(Loss, 0)
-                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
                 g_reg = self.get_grad(Loss, training_step, 1)
-                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
                 
                 # grad를 다 더해서 VGG16을 훈련시킬거다.
                 grad_acc_cls = tf.add(grad_acc_cls, g_cls)
@@ -236,9 +239,9 @@ class Detector(tf.keras.Model):
                 Loss = Loss_list[i]
                 # Detector는 로스 하나하나 적용함
                 g_cls = self.get_grad(Loss, 0)
-                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
                 g_reg = self.get_grad(Loss, training_step, 1)
-                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
 
     def get_minibatch(self, RoI_list, Ground_Truth_Box_list, Cls_label_list): # 64개의 RoI 추출 + RoI에 맞는 라벨들 추출
         # Ground_Truth_Box_list : (x_min, y_min, x_max, y_max)

@@ -260,8 +260,6 @@ def get_nms_list(RPN_Model, image_list) :
     # 테스트할 때만 사용한다. 훈련할 때는 이미지 경계에 걸리는 RoI만 걸러낸다.
 
     NMS_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
-    NMS_GroundTruthBoxes_List = []
-    NMS_Classes_List = []
 
     for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
         cls_layer_output, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
@@ -292,17 +290,15 @@ def filtering_nonCrossBoundaryRoI(reg_layer_output): # 한 이미지 내에서 �
 def get_nonCrossBoundaryRoI_list(RPN_Model, image_list) :
     # 훈련할 때는 각 이미지의 경계에 걸리는 RoI만 걸러낸다.
 
-    NMS_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
-    NMS_GroundTruthBoxes_List = []
-    NMS_Classes_List = []
+    nonCrossBoundary_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
 
     for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
         cls_layer_output, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
 
-        nms_RoI_inImage = nms(cls_layer_output, reg_layer_output) # # 각 이미지에서 RoI들 구하기
-        NMS_RoIs_List.append(nms_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
+        nonCrossBoundary_RoI_inImage = filtering_nonCrossBoundaryRoI(cls_layer_output, reg_layer_output) # # 각 이미지에서 RoI들 구하기
+        nonCrossBoundary_RoIs_List.append(nonCrossBoundary_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
 
-    return NMS_RoIs_List # (5011, list) 리스트를 반환
+    return nonCrossBoundary_RoIs_List # (5011, list) 리스트를 반환
 
 # 데이터셋에 존재하는 클래스가 얼마나 있는지 알아낸다
 def get_Classes_inImage(xml_file_list):

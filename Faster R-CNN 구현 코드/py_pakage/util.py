@@ -84,8 +84,6 @@ def make_anchor(anchor_size, anchor_aspect_ratio) :
     # 앵커 중심좌표 간격
     interval_x = 16
     interval_y = 16
-    Center_max_x = 208 # 224 - 16, 중심좌표가 224가 될 수는 없다.
-    Center_max_y = 208 # 224 - 16
 
     # 2단 while문 생성
     x = 8
@@ -116,7 +114,7 @@ def make_anchor(anchor_size, anchor_aspect_ratio) :
 
 # 앵커들을 Positive, Negative 앵커로 나누고 각 앵커가 참고한 Ground Truth Box와 Class를 반환하자
 # RPN에는 '어떤 클래스인가?'는 알 필요가 없다. '객체인가 아닌가'이거 하나만 필요할 뿐. 
-def align_anchors(anchors, anchors_state, Ground_Truth_Box_list):
+def align_anchor(anchors, anchors_state, Ground_Truth_Box_list):
 
     # 각 앵커는 해당 위치에서 구한 여러가지 Ground truth Box와의 ioU 중 제일 높은거만 가져온다. 
     IoU_List = np.array([])
@@ -129,6 +127,15 @@ def align_anchors(anchors, anchors_state, Ground_Truth_Box_list):
             IoU_List = np.append(IoU_List, 0)
             Ground_truth_box_Highest_IoU_List.append([0,0,0,0])
 
+            if i % 9 == 8 :
+                IoU_List_inOneSpot = IoU_List[i-8:i+1]
+                for num in list(range(i-8, i + 1)):
+                    if IoU_List[num] > 0.7 or (max(IoU_List_inOneSpot) == IoU_List[num] and IoU_List[num] >= 0.3): # positive anchor
+                        anchors_state[num] = 2
+                    elif IoU_List[num] < 0.3 : # negative anchor
+                        anchors_state[num] = 1
+                    else: # 애매한 앵커들
+                        anchors_state[num] = 0    
         else:
             anchor_minX = anchors[i][0] - (anchors[i][2]/2)
             anchor_minY = anchors[i][1] - (anchors[i][3]/2)
@@ -137,7 +144,6 @@ def align_anchors(anchors, anchors_state, Ground_Truth_Box_list):
 
             anchor = [anchor_minX, anchor_minY, anchor_maxX, anchor_maxY]
 
-            # 연산 속도 때문에 Box대신 Ground Truth Box의 인덱스를 저장
             IoU_max = 0
             ground_truth_box_Highest_IoU = [0,0,0,0]
 
@@ -168,7 +174,7 @@ def align_anchors(anchors, anchors_state, Ground_Truth_Box_list):
             IoU_List = np.append(IoU_List, IoU_max)
             Ground_truth_box_Highest_IoU_List.append(ground_truth_box_Highest_IoU)
 
-        # 한 위치에 9개의 앵커 존재 -> 9개 앵커에 대한 IoU를 계산할 때마다 모아서 Positive, Negative 앵커 분류
+            # 한 위치에 9개의 앵커 존재 -> 9개 앵커에 대한 IoU를 계산할 때마다 모아서 Positive, Negative 앵커 분류
             if i % 9 == 8 :
                 IoU_List_inOneSpot = IoU_List[i-8:i+1]
                 for num in list(range(i-8, i + 1)):
@@ -201,7 +207,7 @@ def make_dataset_forRPN(input_list) :
     # 값 계속 생성하는거 막기위한 변수
     cls_label_forPositive = np.array([1.0,0.0])
     cls_label_forNegative = np.array([0.0,1.0])
-    cls_label_forUseless  = np.array([0.0,0.0])
+    cls_label_forUseless  = np.array([0.5,0.5])
 
     reg_label_forNotPositive = np.array([0.0, 0.0, 0.0, 0.0])
 
@@ -209,7 +215,7 @@ def make_dataset_forRPN(input_list) :
 
         anchors_state_for = anchors_state # anchors_state는 매 사진마다 다르니까 원본값(?)을 복사해서 쓴다. 
         Ground_Truth_Box_list = get_Ground_Truth_Box_fromImage(xml_file_list[i]) # 여기서는 Ground Truth Box에 대한 정보만 필요하다
-        anchors_state_for, Ground_truth_box_Highest_IoU_List = align_anchors(anchors, anchors_state_for, Ground_Truth_Box_list)
+        anchors_state_for, Ground_truth_box_Highest_IoU_List = align_anchor(anchors, anchors_state_for, Ground_Truth_Box_list)
         # 어떤 앵커가 Pos, neg 앵커인지, (모든)앵커가 참조한 ground truth box는 뭔지
     
         #start = time.time()
@@ -218,7 +224,12 @@ def make_dataset_forRPN(input_list) :
         reg_layer_label_list_for = np.array([])
         for j in range(0, len(anchors_state_for)) :
             if anchors_state_for[j] == 2 : # positive
-                Ground_truth_box = np.array([Ground_truth_box_Highest_IoU_List[j][0] + Ground_truth_box_Highest_IoU_List[j][2]/2, Ground_truth_box_Highest_IoU_List[j][1] + Ground_truth_box_Highest_IoU_List[j][2]/2, Ground_truth_box_Highest_IoU_List[j][2] - Ground_truth_box_Highest_IoU_List[j][0], Ground_truth_box_Highest_IoU_List[j][3] - Ground_truth_box_Highest_IoU_List[j][1]])
+                gtb_x = Ground_truth_box_Highest_IoU_List[j][0] + Ground_truth_box_Highest_IoU_List[j][2]/2
+                gtb_y = Ground_truth_box_Highest_IoU_List[j][1] + Ground_truth_box_Highest_IoU_List[j][3]/2
+                gtb_w = Ground_truth_box_Highest_IoU_List[j][2]/2
+                gtb_h = Ground_truth_box_Highest_IoU_List[j][3]/2
+                
+                Ground_truth_box = np.array([gtb_x, gtb_y, gtb_w, gtb_h])
                 cls_layer_label_list_for = np.append(cls_layer_label_list_for, cls_label_forPositive)
                 reg_layer_label_list_for = np.append(reg_layer_label_list_for, Ground_truth_box) # IoU계산에 참조한(pos, neg 분류에 기여한) Ground Truth Box의 정보 휙득
             elif anchors_state_for[j] == 1 : # negative는 Ground Truth Box 정보가 필요없으니 [0,0,0,0]을 넣는다. 
@@ -257,12 +268,12 @@ def nms(cls_layer_output, reg_layer_output): # 한 이미지 안에 있는 RoI�
     return nms_RoI_inImage # RoI 반환
 
 def get_nms_list(RPN_Model, image_list) :
-    # 테스트할 때만 사용한다. 훈련할 때는 이미지 경계에 걸리는 RoI만 걸러낸다.
+    # Detector 훈련에 필요한 데이터를 얻는 곳이다
 
     NMS_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
 
-    for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
-        cls_layer_output, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
+    for i in tqdm(range(0, len(RPN_Model)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
+        cls_layer_output, reg_layer_output = RPN_Model(image_list) # output을 얻는다
 
         nms_RoI_inImage = nms(cls_layer_output, reg_layer_output) # # 각 이미지에서 RoI들 구하기
         NMS_RoIs_List.append(nms_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
@@ -273,7 +284,7 @@ def get_nms_list(RPN_Model, image_list) :
 def filtering_nonCrossBoundaryRoI(reg_layer_output): # 한 이미지 내에서 생성된 RoI 중 이미지의 경계선을 넘지 않는 RoI만 선별한다.
     # 넘파이 배열로 변환
     reg_layer_output = reg_layer_output.numpy()
-
+    
     nonCrossBoundary_RoI_inImage = [] # 한 이미지에 들어있는 RoI 리스트
 
     for i in range(0, len(reg_layer_output)) :
@@ -284,7 +295,6 @@ def filtering_nonCrossBoundaryRoI(reg_layer_output): # 한 이미지 내에서 �
         if((x - (w/2) >= 0) and (y - (h/2) >= 0) and
         (x + (w/2) <= 224) and (y + (h/2) <= 224)):
             nonCrossBoundary_RoI_inImage.append(reg_layer_output[i])
-
     return nonCrossBoundary_RoI_inImage # RoI 반환
 
 def get_nonCrossBoundaryRoI_list(RPN_Model, image_list) :
@@ -295,14 +305,14 @@ def get_nonCrossBoundaryRoI_list(RPN_Model, image_list) :
     for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
         cls_layer_output, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
 
-        nonCrossBoundary_RoI_inImage = filtering_nonCrossBoundaryRoI(cls_layer_output, reg_layer_output) # # 각 이미지에서 RoI들 구하기
+        nonCrossBoundary_RoI_inImage = filtering_nonCrossBoundaryRoI(reg_layer_output) # 각 이미지에서 RoI들 구하기
         nonCrossBoundary_RoIs_List.append(nonCrossBoundary_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
 
-    return nonCrossBoundary_RoIs_List # (5011, list) 리스트를 반환
+    return nonCrossBoundary_RoIs_List
 
 # 데이터셋에 존재하는 클래스가 얼마나 있는지 알아낸다
 def get_Classes_inImage(xml_file_list):
-    classes = []
+    Classes_inDataSet = []
 
     for xml_file_path in xml_file_list: 
 
@@ -311,18 +321,18 @@ def get_Classes_inImage(xml_file_list):
         # 사진에 객체가 여러개 있을 경우
         try: 
             for obj in xml_file['annotation']['object']:
-                classes.append(obj['name'].lower()) # 들어있는 객체 종류를 알아낸다
+                Classes_inDataSet.append(obj['name'].lower()) # 들어있는 객체 종류를 알아낸다
         # 사진에 객체가 하나만 있을 경우
         except TypeError as e: 
-            classes.append(xml_file['annotation']['object']['name'].lower()) 
+            Classes_inDataSet.append(xml_file['annotation']['object']['name'].lower()) 
         f.close()
 
-    classes = list(set(classes)) # set은 중복된걸 다 제거하고 유니크한? 아무튼 하나만 가져온다. 그걸 리스트로 만든다
-    classes.sort() # 정렬
+    Classes_inDataSet = list(set(Classes_inDataSet)) # set은 중복된걸 다 제거하고 유니크한? 아무튼 하나만 가져온다. 그걸 리스트로 만든다
+    Classes_inDataSet.sort() # 정렬
 
-    return classes
+    return Classes_inDataSet
 
-def make_Cls_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
+def make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
     # Label List를 받아 데이터셋에 어떤 클래스가 있는지 알아내고 클래스 종류를 받아 이미지별 어떤 클래스가 있는지 Ground Truth Box별로 one-hot encoding을 해서 반환한다
     # 이미지별 GroundTruthBox도 반환한다
     num_Classes = len(Classes_inDataSet) # 데이터셋에 클래스가 몇종류인가?
@@ -350,7 +360,7 @@ def make_Cls_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
         # 그 인덱스 번호로 원-핫 인코딩 수행
         cls_index_list = []
         for class_val in classes :
-            cls_index = Classes_inDataSet.index(class_val) # 클래스가 Classes_List 내에서 어떤 인덱스 번호를 갖고 있는가?
+            cls_index = Classes_inDataSet.index(class_val) # 클래스가 Classes_inDataSet 내에서 어떤 인덱스 번호를 갖고 있는가?
             cls_index_list.append(cls_index)# 한 이미지 내에 있는 Ground Truth Box별로 갖고 있는 클래스 인덱스를 저장
         cls_onehot_inImage = np.eye(len(Classes_inDataSet))[cls_index_list] # (n,21) 크기의 리스트 받음. 여기서 n은 한 이미지 내에 있는 객체 숫자
 
@@ -368,11 +378,11 @@ def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, xml_fi
         RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, 1)
 
     # 훈련시킨 RPN에서 Detector훈련에 필요한 데이터 휙득
-    NMS_RoIs_List = get_nonCrossBoundaryRoI_list(RPN_Model, image_list) # 입력 데이터
-    Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN = make_Cls_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet) # 라벨 데이터
+    nonCrossBoundaryRoIs_List = get_nonCrossBoundaryRoI_list(RPN_Model, image_list)# RoI는 경계선 넘지 않는 것들만
+    Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN = make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet) # 라벨 데이터
 
     for i in range(0, EPOCH) : # Detector 훈련
-        Detector_Model.Training_model(image_list, NMS_RoIs_List, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 2)
+        Detector_Model.Training_model(image_list, nonCrossBoundaryRoIs_List, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 2)
 
     # Detector_Model의 VGG를 RPN에 이식(레이어 공유 시작)
     RPN_Model.conv1_1 = Detector_Model.conv1_1
@@ -392,7 +402,7 @@ def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, xml_fi
     for i in range(0, EPOCH) : # RPN 훈련
         RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, 3)
 
-    NMS_RoIs_List = get_nonCrossBoundaryRoI_list(RPN_Model, image_list) # 입력 데이터. 새로 훈련한 RPN에서 RoI를 선별한다
+    NMS_RoIs_List = get_nms_list(RPN_Model, image_list) # 입력 데이터. 새로 훈련한 RPN에서 RoI를 선별한다
 
     # RPN의 VGG16을 Detector의 VGG16 부분에 이식
     Detector_Model.conv1_1 = RPN_Model.conv1_1

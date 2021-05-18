@@ -6,6 +6,7 @@ from tqdm import tqdm
 # RoI Pooling Layer + Fast RCNN
 
 # Pooling 작업을 RoI 지역에 대해 한다. 14*14*512를 7*7*512로
+# Pooling 작업을 RoI 지역에 대해 한다. 14*14*512를 7*7*512로 만든다
 class RoiPoolingLayer(tf.keras.layers.Layer):
     def __init__(self, pool_size):
         super(RoiPoolingLayer, self).__init__(name='RoI_Pooling_Layer')
@@ -96,8 +97,7 @@ class Detector(tf.keras.Model):
         # RoI Pooling : H*W(7*7)에 맞게 입력 특성맵을 pooling. RoI에 해당하는 영역을 7*7로 Pooling한다. 
         self.RoI_Pooling_Layer = RoiPoolingLayer(7) # Pooling 이후 크기를 7*7*512로 만든다. -> (1,num_roi,7,7,512)
         self.Flatten_layer = tf.keras.layers.Flatten() # num_roi*7*7*512개의 텐서가 일렬로 나열됨
-        self.Fully_Connected_1 = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
-        self.Fully_Connected_2 = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다. 4096이 뭐 generalize하기 좋은 숫자라고 하는데 어...까먹었다.
+        self.Fully_Connected = tf.keras.layers.Dense(4096, activation='relu') # 별 말이 없으니 기본적으로 지정된 kernel_initializer를 사용하자. 여기선 RoI별 [1, 7*7*512] 텐서를 넣는다.
         self.Classify_layer = tf.keras.layers.Dense(21, activation='softmax', kernel_initializer = Classify_layer_initializer, name = "output_1")
         self.Reg_layer = tf.keras.layers.Dense(84, activation= None, kernel_initializer = Box_regression_layer_initializer, name = "output_2")
     
@@ -136,8 +136,7 @@ class Detector(tf.keras.Model):
 
         for i in range(0, len(flatten_perRoI)):
             flatten_output = flatten_perRoI[i] # flatten된걸 하나씩 꺼냄
-            Fully_Connected_output = self.Fully_Connected_1(flatten_output)
-            Fully_Connected_output = self.Fully_Connected_2(Fully_Connected_output)
+            Fully_Connected_output = self.Fully_Connected(flatten_output) # FCs로 만들기
             # 객체 분류 레이어, 박스 회귀 레이어
             cls_output = self.Classify_layer(Fully_Connected_output) 
             reg_output = self.Reg_layer(Fully_Connected_output)
@@ -147,103 +146,7 @@ class Detector(tf.keras.Model):
 
         return Classify_layer_output, Reg_layer_output # Classify_layer_output : [1,21] 텐서가 len(RoI_list)개 모인 리스트, Reg_layer_output : [1, 84] 텐서가 len(RoI_list)개 모인 리스트
 
-    # 필요한거 : multi task loss, gradient 계산, 적용
-    def multi_task_loss(self, image, RoI_list, Ground_Truth_Box_list, Cls_label_list):
-        # image는 (1,224,224,3), RoI_list는 (x,y,w,h)양식인 박스들 64개, Ground_Truth_Box_list는 (x_min, y_min, x_max, y_max)인 애들이 64개, Cls_label_list는 (,21)인 원-핫 인코딩된 애들이 64개
-        # 여기서는 64개의 RoI에 해당하는 Loss 64개를 구한다. 
-        Classify_layer_output, Reg_layer_output = self.call(image, RoI_list) # tensor들이 64개씩 모인 리스트 2개 휙득. Reg_layer_output은 (x,y,w,h)인 텐서들이 21개 일렬로 있다 -> (1, 84) 텐서
-
-        loss_list = []
-
-        for i in range(0, 64) : # index 0~15는 IoU가 0.5이상인 RoI들, 16~63은 IoU가 0.1~0.49999...인 RoI들
-            # 각 RoI별 리스트 하나씩 꺼냄
-            cls_output = Classify_layer_output[i]
-            reg_output = Reg_layer_output[i]
-            # 라벨값도 하나씩 꺼냄
-            ground_truth_box = Ground_Truth_Box_list[i]
-            cls_label = Cls_label_list[i]
-
-            # loss 계산
-            cls_loss = tf.nn.softmax_cross_entropy_with_logits(labels=cls_label, logits=cls_output)
-
-            reg_loss = 0
-            if i < 16:
-                # (1,84)에서 해당 클래스에 해당하는 값을 얻어야한다(예 : '자동차'객체에 대한 박스 위치 추측값)
-                # 논문에서 (x,y,w,h)에 대한 smooth l1을 구하라길래 ground_truth_box를 (x,y,w,h)로 바꿔주고자 한다
-                gtb = tf.constant([ground_truth_box[0] + ground_truth_box[2]/2, ground_truth_box[1] + ground_truth_box[3]/2, ground_truth_box[2] - ground_truth_box[0], ground_truth_box[3] - ground_truth_box[1]])
-                class_index = tf.argmax(cls_label) # 라벨값의 원-핫 인코딩에서 가장 큰 값의 인덱스 = 클래스의 인덱스에 해당. 
-                pred_box = reg_output[4*class_index:4*class_index + 4] # 예측값에서 해당 클래스에 해당되는 박스 좌표를 불러온다. 
-                reg_loss = tf.compat.v1.losses.huber_loss(gtb, pred_box) # (x,y,w,h) 각 성분에 대해 smoothL1(ti −vi)한 값을 다 더한게 나온다. 
-        
-            loss = tf.add(cls_loss, reg_loss)
-            loss_list.append(loss) # loss list에 loss를 넣는다.
-
-        return loss_list # 64개의 loss로 이루어진 리스트를 반환
-
-    def get_grad(self, Loss, cls_reg_boolean): # Loss 하나씩 그래디언트 구하기
-        g = 0
-        with tf.GradientTape() as tape:
-            tape.watch(self.conv1_1.variables)
-            tape.watch(self.conv1_2.variables)
-            tape.watch(self.conv2_1.variables)
-            tape.watch(self.conv2_2.variables)
-            tape.watch(self.conv3_1.variables)
-            tape.watch(self.conv3_2.variables)
-            tape.watch(self.conv3_3.variables)
-            tape.watch(self.conv4_1.variables)
-            tape.watch(self.conv4_2.variables)
-            tape.watch(self.conv4_3.variables)
-            tape.watch(self.conv5_1.variables)
-            tape.watch(self.conv5_2.variables)
-            tape.watch(self.conv5_3.variables)
-            tape.watch(self.Fully_Connected_1.variables)
-            tape.watch(self.Fully_Connected_2.variables)
-
-            if cls_reg_boolean == 0:
-                tape.watch(self.Classify_layer.variables)
-            else:
-                tape.watch(self.Reg_layer.variables)
-
-            
-            if cls_reg_boolean == 0:
-                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1],self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
-            else:
-                g = tape.gradient(Loss, [self.conv1_1.variables[0], self.conv1_1.variables[1],self.conv1_2.variables[0], self.conv1_2.variables[1],self.conv2_1.variables[0], self.conv2_1.variables[1],self.conv2_2.variables[0], self.conv2_2.variables[1], self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
-
-        return g
-
-    def App_Gradient(self, Loss_list, training_step) : # 64개의 loss로 이루어진 리스트를 받는다. training_step은 2 아니면 4다. 
-        if training_step == 2:
-            grad_acc_cls = tf.Variable(0.0)
-            grad_acc_reg = tf.Variable(0.0)
-            for i in range (0, 64) :
-                Loss = Loss_list[i]
-                # Detector는 로스 하나하나 적용함
-                g_cls = self.get_grad(Loss, 0)
-                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
-                g_reg = self.get_grad(Loss, training_step, 1)
-                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
-                
-                # grad를 다 더해서 VGG16을 훈련시킬거다.
-                grad_acc_cls = tf.add(grad_acc_cls, g_cls)
-                grad_acc_reg = tf.add(grad_acc_cls, g_reg)
-
-            # 한 이미지에 대한 전체 grad를 얻는다. 
-            total_grad = tf.add(grad_acc_cls, grad_acc_reg)
-            # vgg16 훈련(conv3_1부터 conv5_3까지)
-            self.Optimizers.apply_gradients(zip(total_grad, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1]]))
-            
-        # 4번 째 단계에선 Detector만 훈련시키면 된다.
-        if training_step == 4:
-            for i in range (0, 64) :
-                Loss = Loss_list[i]
-                # Detector는 로스 하나하나 적용함
-                g_cls = self.get_grad(Loss, 0)
-                self.Optimizers.apply_gradients(zip(g_cls, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
-                g_reg = self.get_grad(Loss, training_step, 1)
-                self.Optimizers.apply_gradients(zip(g_reg, [self.Fully_Connected_1.variables[0],self.Fully_Connected_1.variables[1], self.Fully_Connected_2.variables[0],self.Fully_Connected_2.variables[1], self.Classify_layer.variables[0],self.Reg_layer.variables[1]]))
-
-    def get_minibatch(self, RoI_list, Ground_Truth_Box_list, Cls_label_list): # 64개의 RoI 추출 + RoI에 맞는 라벨들 추출
+    def get_minibatch(self, RoI_list, Reg_labels, Cls_labels): # 로스를 계산하기 전에 입력받은 데이터에서 64개씩 추출
         # Ground_Truth_Box_list : (x_min, y_min, x_max, y_max)
         RoI_object_presume_group = []
         Ground_Truth_Box_object_presume_group = []
@@ -265,10 +168,10 @@ class Detector(tf.keras.Model):
             cls_Higest_IoU = 0 # ground_truth_box_Highest_IoU는 어떤 클래스의 ground truth box와 IoU가 가장 높았나. 원핫 인코딩 양식임
 
             # RoI의 IoU를 구한다.
-            for j in range(0, len(Ground_Truth_Box_list)):
+            for j in range(0, len(Reg_labels)): # Reg_labels은 각 RoI가 어떤 Ground Truth Box와 연관 있는지 나타낸다.
 
-                ground_truth_box = Ground_Truth_Box_list[j]
-                cls_label = Cls_label_list[j]
+                ground_truth_box = Reg_labels[j]
+                cls_label = Cls_labels[j]
 
                 InterSection_min_x = max(RoI_x_min, ground_truth_box[0])
                 InterSection_min_y = max(RoI_y_min, ground_truth_box[1])
@@ -302,23 +205,146 @@ class Detector(tf.keras.Model):
                 Ground_Truth_Box_background_presume_group.append(ground_truth_box_Highest_IoU)
                 Cls_label_background_presume_group.append(cls_Higest_IoU)
 
-        # 나눠진 애들 중 각각 16, 32개를 선별
-        # 인덱스를 랜덤으로 각각 16, 32개 선발
-        RoI_minibatch = random.choice(RoI_object_presume_group, 16)
-        Ground_Truth_Box_minibatch = random.choice(Ground_Truth_Box_object_presume_group, 16)
-        Cls_label_minibatch = random.choice(Cls_label_object_presume_group, 16)
+        # 나눠진 애들 중 각각 16, 48개를 선별
+        # 인덱스를 랜덤으로 각각 16, 48개 선발. 만약 IoU가 0.5 이상인게 16개보다 작으면 부족한 부분을 다른 그룹에서 가져오기
+        
+        max_for = min([16, len(RoI_object_presume_group)])
+        
+        RoI_minibatch = random.sample(RoI_object_presume_group, max_for)
+        Reg_label_minibatch = random.sample(Ground_Truth_Box_object_presume_group, max_for)
+        Cls_label_minibatch = random.sample(Cls_label_object_presume_group, max_for)
 
-        RoI_minibatch.extend(random.choice(RoI_background_presume_group, 32))
-        Ground_Truth_Box_minibatch.extend(random.choice(Ground_Truth_Box_background_presume_group, 32))
-        Cls_label_minibatch.extend(random.choice(Cls_label_background_presume_group, 32))
+        RoI_minibatch.extend(random.sample(RoI_background_presume_group, 64-max_for))
+        Reg_label_minibatch.extend(random.sample(Ground_Truth_Box_background_presume_group, 64-max_for))
+        Cls_label_minibatch.extend(random.sample(Cls_label_background_presume_group, 64-max_for))
 
-        return RoI_minibatch, Ground_Truth_Box_minibatch, Cls_label_minibatch
+        return RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, max_for # 어느 구간부터 RoI 종류가 갈리는지
 
+    # 필요한거 : multi task loss, gradient 계산, 적용
+    def multi_task_loss(self, image, RoI_list, Reg_labels, Cls_labels): # 한 이미지에 대한 RoI, 라벨을 받는다.  
+        RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, max_for = self.get_minibatch(RoI_list, Reg_labels, Cls_labels) # 이미지 당 64개의 미니배치 선별 (128/2 = 64) 
+
+        Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) # 출력값을 얻어보자
+
+        loss_list = []
+
+        for i in range(0, 64) : # index 0~15는 IoU가 0.5이상인 RoI들, 16~63은 IoU가 0.1~0.49999...인 RoI들
+            # 각 RoI별 리스트 하나씩 꺼냄
+            cls_output = Classify_layer_output[i]
+            reg_output = Reg_layer_output[i]
+            # 라벨값도 하나씩 꺼냄
+            ground_truth_box = Reg_label_minibatch[i]
+            cls_label = Cls_label_minibatch[i]
+
+            # loss 계산
+            cls_loss = tf.nn.softmax_cross_entropy_with_logits(labels=cls_label, logits=cls_output)
+
+            reg_loss = 0
+            if i < max_for: # IoU > 0.5인 RoI들
+                # (1,84)에서 해당 클래스에 해당하는 값을 얻어야한다(예 : '자동차'객체에 대한 박스 위치 추측값)
+                # 논문에서 (x,y,w,h)에 대한 smooth l1을 구하라길래 ground_truth_box를 (x,y,w,h)로 바꿔주고자 한다
+                gtb = tf.constant([ground_truth_box[0] + ground_truth_box[2]/2, ground_truth_box[1] + ground_truth_box[3]/2, ground_truth_box[2] - ground_truth_box[0], ground_truth_box[3] - ground_truth_box[1]])
+                class_index = tf.argmax(cls_label) # 라벨값의 원-핫 인코딩에서 가장 큰 값의 인덱스 = 클래스의 인덱스에 해당. 
+                pred_box = reg_output[4*class_index:4*class_index + 4] # 예측값에서 해당 클래스에 해당되는 박스 좌표를 불러온다. 
+                reg_loss = tf.compat.v1.losses.huber_loss(gtb, pred_box) # (x,y,w,h) 각 성분에 대해 smoothL1(ti −vi)한 값을 다 더한게 나온다. 
+        
+            loss = tf.add(cls_loss, reg_loss)
+            loss_list.append(loss) # loss list에 loss를 넣는다.
+
+        return loss_list # 64개의 loss로 이루어진 리스트를 반환
+    
+    def get_grad(self, image, RoI_list, Reg_labels, Cls_labels, g_num, training_step): 
+        g_list = []
+
+        with tf.GradientTape() as tape:
+            
+            if training_step == 2 : # conv3_1 ~ 끝까지 훈련
+                tape.watch(self.conv3_1.variables)
+                tape.watch(self.conv3_2.variables)
+                tape.watch(self.conv3_3.variables)
+                tape.watch(self.conv4_1.variables)
+                tape.watch(self.conv4_2.variables)
+                tape.watch(self.conv4_3.variables)
+                tape.watch(self.conv5_1.variables)
+                tape.watch(self.conv5_2.variables)
+                tape.watch(self.conv5_3.variables)
+                tape.watch(self.Fully_Connected.variables)
+                
+                if g_num == 0: # loss about cls
+                    tape.watch(self.Classify_layer.variables)
+                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
+
+                    for i in range (0, len(Loss_list)):
+                        g = tape.gradient(Loss_list[i], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
+                        g_list.append(g)
+                            
+
+                elif g_num == 1: # loss about reg
+                    tape.watch(self.Reg_layer.variables)
+                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
+
+                    for i in range (0, len(Loss_list)):
+                        g = tape.gradient(Loss_list[i], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
+                        g_list.append(g)
+
+            elif training_step == 4 : # Detector만 훈련
+                tape.watch(self.Fully_Connected.variables)
+
+                if g_num == 0: # loss about cls
+                    tape.watch(self.Classify_layer.variables)
+                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
+
+                    for i in range (0, len(Loss_list)):
+                        g = tape.gradient(Loss_list[i], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
+                        g_list.append(g)
+                            
+                elif g_num == 1: # loss about reg
+                    tape.watch(self.Reg_layer.variables)
+                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
+
+                    for i in range (0, len(Loss_list)):
+                        g = tape.gradient(Loss_list[i], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
+                        g_list.append(g)
+        return g_list
+    
+    def App_Gradient(self, image, RoI_list, Reg_labels, Cls_labels, training_step) :
+        g_cls_list = self.get_grad(image, RoI_list, Reg_labels, Cls_labels, 0, training_step)
+        g_reg_list = self.get_grad(image, RoI_list, Reg_labels, Cls_labels, 1, training_step)
+        
+        if training_step == 2:
+            g_cls_total = 0
+            g_reg_total = 0
+
+            # Detector 훈련
+            for i in range(0, len(g_cls_list)):
+                g_cls = g_cls_list[i]
+                g_reg = g_cls_list[i]
+                # g_cls는 각 레이어(get_grad()에서 tape.watch를 통해 관찰한 레이어)에 대한 모든 그래디언트가 모여있다. 관찰 명단에 넣은 순서대로 리스트가 정렬 되어있다. 
+                # 맨 뒤에 4개는 Fully_Connected의 가중치와 절편, 제일 마지막 두가지 레이어 중 하나의 가중치와 절편 이렇게 4개에 대한 그래디언트를 말한다. 아래 코드는 맨 마지막 레이어 두개에 그래디언트를 적용하는 코드다.
+                self.Optimizers.apply_gradients(zip(g_cls[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_reg[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
+                
+                # 적용하고 나면 사용했던 그래디언트를 한 곳에 모은다.
+                if g_cls_total == 0:
+                    g_cls_total = g_cls
+                    g_reg_total = g_reg
+                else :
+                    g_cls_total = tf.math.add(g_cls_total, g_cls)
+                    g_reg_total = tf.math.add(g_reg_total, g_reg)
+            # 모인 그래디언트로 VGG16의 conv3_1부터 5_3까지 훈련시킨다.
+            self.Optimizers.apply_gradients(zip(g_cls_total[:-4], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g_reg_total[:-4], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1]]))
+
+        
+        elif training_step == 4:
+            # Detector만 훈련
+            for i in range(0, len(g_cls_list)):
+                g_cls = g_cls_list[i]
+                g_reg = g_cls_list[i]
+                self.Optimizers.apply_gradients(zip(g_cls[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
+                self.Optimizers.apply_gradients(zip(g_reg[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
 
     def Training_model(self, image_list, RoI_list_forAllImage, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, training_step):
         for i in tqdm(range(0, len(image_list)), desc = "training"):
             image = np.expand_dims(image_list[i], axis = 0)
-            RoI_minibatch, Ground_Truth_Box_minibatch, Cls_label_minibatch = self.get_minibatch(self, RoI_list_forAllImage, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN) # 이미지 당 64개의 미니배치 선별 (128/2 = 64)
-            
-            Loss_list = self.multi_task_loss(image, RoI_minibatch, Ground_Truth_Box_minibatch, Cls_label_minibatch) # RoI 64개에 대한 64개의 loss로 이루어진 리스트 반환
-            self.App_Gradient(Loss_list, training_step)
+            self.App_Gradient(image, RoI_list_forAllImage[i], Reg_labels_for_FastRCNN[i], Cls_labels_for_FastRCNN[i], training_step)

@@ -86,18 +86,18 @@ class RPN(tf.keras.Model):
         
         return cls_layer_output, reg_layer_output
 
-    def get_minibatch_index(self, cls_layer_output): # 라벨이니까 (1764,2) 넘파이 온다
+    def get_minibatch_index(self, cls_layer_output_label): # 라벨이니까 (1764,2) 넘파이 온다
 
         index_list = np.array([])
         
         index_list = np.zeros(1764) # 각 앵커가 미니배치 뽑혔나 안뽑혔나
         index_pos = np.array([])
         index_neg = np.array([])
-        # cls_layer_output을 보고 긍정, 부정 앵커 분류. 그렇게 데이터셋을 구성함
+        # cls_layer_output_label을 보고 긍정, 부정 앵커 분류. 그렇게 데이터셋을 구성함
         for i in range(0, 1764):
-            if cls_layer_output[i][0] == 1.0 : # positive anchor
+            if cls_layer_output_label[i][0] == 1.0 : # positive anchor
                 index_pos = np.append(index_pos, i)
-            elif cls_layer_output[i][0] == 0.0 : # negative anchor
+            elif cls_layer_output_label[i][0] == 0.0 : # negative anchor
                 index_neg = np.append(index_neg, i)
 
         max_for = min([128, len(index_pos)])

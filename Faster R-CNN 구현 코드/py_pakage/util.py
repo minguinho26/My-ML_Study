@@ -303,7 +303,7 @@ def get_nonCrossBoundaryRoI_list(RPN_Model, image_list) :
     nonCrossBoundary_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
 
     for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
-        cls_layer_output, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
+        _, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
 
         nonCrossBoundary_RoI_inImage = filtering_nonCrossBoundaryRoI(reg_layer_output) # 각 이미지에서 RoI들 구하기
         nonCrossBoundary_RoIs_List.append(nonCrossBoundary_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
@@ -438,23 +438,23 @@ def get_FasterRCNN_output(RPN_Model, Detector_Model, Image, Classes_inDataSet) :
     cls_output, reg_layer = Detector_Model(Image, nms_RoI_inImage) # [1,21] 텐서 여러개, [1,84] 텐서 여러개
     # 넘파이 배열로 변환
     cls_output = cls_output.numpy()
-    # softmax된 21개의 값 중 가장 큰거 = 예측한 객체 index
-    obj_index = np.argmax(cls_output)
-    reg_layer = (reg_layer[4*obj_index:4*obj_index+3]).numpy() # 해당 클래스의 Box정보만 얻고 넘파이 배열로 만든다
-    # 얻은 박스를 원래 이미지 비율에 맞게 바꿔준다. 
-    reg_layer[0] = reg_layer[0] * (image_size[0] / 224)
-    reg_layer[1] = reg_layer[1] * (image_size[1] / 224)
-    reg_layer[2] = reg_layer[2] * (image_size[0] / 224)
-    reg_layer[3] = reg_layer[3] * (image_size[1] / 224)
 
-    # rectangle함수를 위해 필요한 '박스의 최소 x,y 좌표'와 '박스의 최대 x,y좌표'리스트를 생성한다. 
-    min_box = (round(reg_layer[0] - reg_layer[2]/2), round(reg_layer[1] - reg_layer[3]/2))
-    max_box = (round(reg_layer[0] + reg_layer[2]/2), round(reg_layer[1] + reg_layer[3]/2)) 
-
-    # 출력하기
+    # 크기 조정 + 출력
     im_read = cv2.read(Image)
-    cv2.rectangle(im_read, min_box, max_box, (255, 0, 0), -1) # 박스 그리기
+    for i in range(0, len(cls_output)):
+        # softmax된 21개의 값 중 가장 큰거 = 예측한 객체 index
+        obj_index = np.argmax(cls_output[i])
+        pred_box_np = (reg_layer[i][4*obj_index:4*obj_index+3]).numpy() # 해당 클래스의 Box정보만 얻고 넘파이 배열로 만든다
+        # 얻은 박스를 원래 이미지 비율에 맞게 바꿔준다. 
+        pred_box_np[0] = pred_box_np[0] * (image_size[2] / 224)
+        pred_box_np[1] = pred_box_np[1] * (image_size[3] / 224)
+        pred_box_np[2] = pred_box_np[2] * (image_size[2] / 224)
+        pred_box_np[3] = pred_box_np[3] * (image_size[3] / 224)
 
-    cv2.imshow("output", im_read)
-    cv2.waitKey()
-    cv2.destroyAllWindows()
+        # rectangle함수를 위해 필요한 '박스의 최소 x,y 좌표'와 '박스의 최대 x,y좌표'리스트를 생성한다. 
+        min_box = (round(pred_box_np[0] - pred_box_np[2]/2), round(pred_box_np[1] - pred_box_np[3]/2))
+        max_box = (round(pred_box_np[0] + pred_box_np[2]/2), round(pred_box_np[1] + pred_box_np[3]/2)) 
+        # 이미지에 그리기
+        cv2.rectangle(im_read, min_box, max_box, (255, 0, 0), -1) # 박스 그리기
+
+    cv2.imwrite('output.jpg', im_read)

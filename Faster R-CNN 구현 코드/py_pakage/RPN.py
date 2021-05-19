@@ -121,8 +121,8 @@ class RPN(tf.keras.Model):
         minibatch_index_list = self.get_minibatch_index(cls_layer_output_label) # 미니배치 인덱스 휙득
         
         # label은 (1764,2)와 (1764,4)임
-        tensor_cls_label = tf.convert_to_tensor(cls_layer_output_label[0], dtype=tf.float32)
-        tensor_reg_label = tf.convert_to_tensor(reg_layer_output_label[0], dtype=tf.float32)
+        tensor_cls_label = tf.convert_to_tensor(cls_layer_output_label, dtype=tf.float32)
+        tensor_reg_label = tf.convert_to_tensor(reg_layer_output_label, dtype=tf.float32)
 
         # loss 계산(Loss 텐서에서 미니배치에 해당되는 애들만 걸러내야함)
         Cls_Loss = tf.nn.softmax_cross_entropy_with_logits(labels=tensor_cls_label, logits = cls_layer_output) # (1764,1) 텐서
@@ -151,9 +151,6 @@ class RPN(tf.keras.Model):
         y_star = tf.matmul(tensor_reg_label,filter_y)
         w_star = tf.matmul(tensor_reg_label,filter_w)
         h_star = tf.matmul(tensor_reg_label,filter_h)
-
-        w_star_np = w_star.numpy()
-        h_star_np = h_star.numpy()
 
         denominator = tf.math.log(tf.constant(10, dtype=tf.float32)) # 텐서 로그는 ln밖에 없어서 ln10을 구한 뒤 나누는 방식으로 log10을 구한다(로그의 밑변환 공식)
 
@@ -218,7 +215,7 @@ class RPN(tf.keras.Model):
         
         return loss
 
-    def get_grad(self, image, cls_layer_ouptut_label, reg_layer_ouptut_label, g_num, training_step): 
+    def get_grad(self, image, cls_layer_output_label, reg_layer_output_label, g_num, training_step): 
         g = 0
         with tf.GradientTape() as tape:
             
@@ -236,11 +233,11 @@ class RPN(tf.keras.Model):
 
                 if g_num == 0: # loss about cls
                     tape.watch(self.cls_layer.variables)
-                    Loss = self.multi_task_loss(image, cls_layer_ouptut_label, reg_layer_ouptut_label)
+                    Loss = self.multi_task_loss(image, cls_layer_output_label, reg_layer_output_label)
                     g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1]])
                 elif g_num == 1: # loss about reg
                     tape.watch(self.reg_layer.variables)
-                    Loss = self.multi_task_loss(image, cls_layer_ouptut_label, reg_layer_ouptut_label)
+                    Loss = self.multi_task_loss(image, cls_layer_output_label, reg_layer_output_label)
                     g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]])     
             
             else :
@@ -248,18 +245,18 @@ class RPN(tf.keras.Model):
 
                 if g_num == 0: # loss about cls
                     tape.watch(self.cls_layer.variables)
-                    Loss = self.multi_task_loss(image, cls_layer_ouptut_label, reg_layer_ouptut_label)
+                    Loss = self.multi_task_loss(image, cls_layer_output_label, reg_layer_output_label)
                     g = tape.gradient(Loss, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1]])
                 elif g_num == 1: # loss about reg
                     tape.watch(self.reg_layer.variables)
-                    Loss = self.multi_task_loss(image, cls_layer_ouptut_label, reg_layer_ouptut_label)
+                    Loss = self.multi_task_loss(image, cls_layer_output_label, reg_layer_output_label)
                     g = tape.gradient(Loss, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]])     
         return g
     
     
-    def App_Gradient(self, training_step, image, cls_layer_ouptut_label, reg_layer_ouptut_label) :
-        g_cls = self.get_grad(image, cls_layer_ouptut_label, reg_layer_ouptut_label, 0, training_step)
-        g_reg = self.get_grad(image, cls_layer_ouptut_label, reg_layer_ouptut_label, 1, training_step)
+    def App_Gradient(self, training_step, image, cls_layer_output_label, reg_layer_output_label) :
+        g_cls = self.get_grad(image, cls_layer_output_label, reg_layer_output_label, 0, training_step)
+        g_reg = self.get_grad(image, cls_layer_output_label, reg_layer_output_label, 1, training_step)
         
         if training_step == 1:
             self.Optimizers.apply_gradients(zip(g_cls, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1]]))
@@ -268,8 +265,8 @@ class RPN(tf.keras.Model):
             self.Optimizers.apply_gradients(zip(g_cls, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1]]))
             self.Optimizers.apply_gradients(zip(g_reg, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]]))
     # 모델 훈련
-    def Training_model(self, image_list, cls_layer_ouptut_label_list, reg_layer_ouptut_label_list, training_step):
+    def Training_model(self, image_list, cls_layer_output_label_list, reg_layer_output_label_list, training_step):
 
         for i in tqdm(range(0, len(image_list)), desc = "training RPN"):
             image = np.expand_dims(image_list[i], axis = 0) # (1,224,224,3)으로 제작
-            self.App_Gradient(training_step, image, cls_layer_ouptut_label_list[i], reg_layer_ouptut_label_list[i])
+            self.App_Gradient(training_step, image, cls_layer_output_label_list[i], reg_layer_output_label_list[i])

@@ -127,9 +127,9 @@ class Detector(tf.keras.Model):
         
         final_Pooling_output = self.RoI_Pooling_Layer(shared_output, RoI_list) # 공용 레이어와 RoI를 넣어 (1, RoI 개수, 7,7,512) 휙득
 
-        flatten_ouput_forAllRoI = self.Flatten_layer(final_Pooling_output) # Flatten으로 한줄 세우기 = (7*7*512) * RoI 개수
+        flatten_output_forAllRoI = self.Flatten_layer(final_Pooling_output) # Flatten으로 한줄 세우기 = (7*7*512) * RoI 개수
 
-        flatten_perRoI = tf.split(flatten_ouput_forAllRoI, num_or_size_splits = len(RoI_list)) # (1, 7*7*512)텐서가 모인 리스트로 만들었다.
+        flatten_perRoI = tf.split(flatten_output_forAllRoI, num_or_size_splits = len(RoI_list)) # (1, 7*7*512)텐서가 모인 리스트로 만들었다.
 
         Classify_layer_output = []
         Reg_layer_output = []
@@ -208,54 +208,45 @@ class Detector(tf.keras.Model):
         # 나눠진 애들 중 각각 16, 48개를 선별
         # 인덱스를 랜덤으로 각각 16, 48개 선발. 만약 IoU가 0.5 이상인게 16개보다 작으면 부족한 부분을 다른 그룹에서 가져오기
         
-        max_for = min([16, len(RoI_object_presume_group)])
+        num_obj_RoI = min([16, len(RoI_object_presume_group)])
+
+        if num_obj_RoI != 0: # 만약 IoU > 0.5인 RoI가 있으면
+            RoI_minibatch = random.sample(RoI_object_presume_group, num_obj_RoI)
+            Reg_label_minibatch = random.sample(Ground_Truth_Box_object_presume_group, num_obj_RoI)
+            Cls_label_minibatch = random.sample(Cls_label_object_presume_group, num_obj_RoI)
+
+            RoI_minibatch.extend(random.sample(RoI_background_presume_group, 64-num_obj_RoI))
+            Reg_label_minibatch.extend(random.sample(Ground_Truth_Box_background_presume_group, 64-num_obj_RoI))
+            Cls_label_minibatch.extend(random.sample(Cls_label_background_presume_group, 64-num_obj_RoI))
+        else : # IoU > 0.5인 RoI가 하나도 없으면
+            # 배경으로 추측되는 그룹으로만 이루어진 64개의 미니배치 데이터셋을 생성한다.
+            RoI_minibatch = random.sample(RoI_background_presume_group, 64)
+            Reg_label_minibatch = random.sample(Ground_Truth_Box_background_presume_group, 64)
+            Cls_label_minibatch = random.sample(Cls_label_background_presume_group, 64)
+
+        return RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, num_obj_RoI # 어느 구간부터 RoI 종류가 갈리는지
+
+    # 하나의 RoI에 대한 output을 계산합니다.
+    def multi_task_loss(self, Classify_layer_output, Reg_layer_output, Cls_label, Reg_label, num_obj_RoI, num): # 한 이미지에 대한 RoI, 라벨을 받는다.  
+
+        # loss 계산
+        cls_loss = tf.nn.softmax_cross_entropy_with_logits(labels=Cls_label, logits=Classify_layer_output)
+        Loss = cls_loss
         
-        RoI_minibatch = random.sample(RoI_object_presume_group, max_for)
-        Reg_label_minibatch = random.sample(Ground_Truth_Box_object_presume_group, max_for)
-        Cls_label_minibatch = random.sample(Cls_label_object_presume_group, max_for)
+        if num < num_obj_RoI: # IoU > 0.5인 RoI들
+            # (1,84)에서 해당 클래스에 해당하는 값을 얻어야한다(예 : '자동차'객체에 대한 박스 위치 추측값)
+            # 논문에서 (x,y,w,h)에 대한 smooth l1을 구하라길래 ground_truth_box를 (x,y,w,h)로 바꿔주고자 한다
+            gtb = tf.constant([Reg_label[0] + Reg_label[2]/2, Reg_label[1] + Reg_label[3]/2, Reg_label[2] - Reg_label[0], Reg_label[3] - Reg_label[1]])
+            class_index = tf.argmax(Cls_label) # 라벨값의 원-핫 인코딩에서 가장 큰 값의 인덱스 = 클래스의 인덱스에 해당. 
+            pred_box = Reg_layer_output[4*class_index:4*class_index + 4] # 예측값에서 해당 클래스에 해당되는 박스 좌표를 불러온다. 
+            reg_loss = tf.compat.v1.losses.huber_loss(gtb, pred_box) # (x,y,w,h) 각 성분에 대해 smoothL1(ti −vi)한 값을 다 더한게 나온다. 
+            Loss = tf.add(Loss, reg_loss)
+            
 
-        RoI_minibatch.extend(random.sample(RoI_background_presume_group, 64-max_for))
-        Reg_label_minibatch.extend(random.sample(Ground_Truth_Box_background_presume_group, 64-max_for))
-        Cls_label_minibatch.extend(random.sample(Cls_label_background_presume_group, 64-max_for))
-
-        return RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, max_for # 어느 구간부터 RoI 종류가 갈리는지
-
-    # 필요한거 : multi task loss, gradient 계산, 적용
-    def multi_task_loss(self, image, RoI_list, Reg_labels, Cls_labels): # 한 이미지에 대한 RoI, 라벨을 받는다.  
-        RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, max_for = self.get_minibatch(RoI_list, Reg_labels, Cls_labels) # 이미지 당 64개의 미니배치 선별 (128/2 = 64) 
-
-        Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) # 출력값을 얻어보자
-
-        loss_list = []
-
-        for i in range(0, 64) : # index 0~15는 IoU가 0.5이상인 RoI들, 16~63은 IoU가 0.1~0.49999...인 RoI들
-            # 각 RoI별 리스트 하나씩 꺼냄
-            cls_output = Classify_layer_output[i]
-            reg_output = Reg_layer_output[i]
-            # 라벨값도 하나씩 꺼냄
-            ground_truth_box = Reg_label_minibatch[i]
-            cls_label = Cls_label_minibatch[i]
-
-            # loss 계산
-            cls_loss = tf.nn.softmax_cross_entropy_with_logits(labels=cls_label, logits=cls_output)
-
-            reg_loss = 0
-            if i < max_for: # IoU > 0.5인 RoI들
-                # (1,84)에서 해당 클래스에 해당하는 값을 얻어야한다(예 : '자동차'객체에 대한 박스 위치 추측값)
-                # 논문에서 (x,y,w,h)에 대한 smooth l1을 구하라길래 ground_truth_box를 (x,y,w,h)로 바꿔주고자 한다
-                gtb = tf.constant([ground_truth_box[0] + ground_truth_box[2]/2, ground_truth_box[1] + ground_truth_box[3]/2, ground_truth_box[2] - ground_truth_box[0], ground_truth_box[3] - ground_truth_box[1]])
-                class_index = tf.argmax(cls_label) # 라벨값의 원-핫 인코딩에서 가장 큰 값의 인덱스 = 클래스의 인덱스에 해당. 
-                pred_box = reg_output[4*class_index:4*class_index + 4] # 예측값에서 해당 클래스에 해당되는 박스 좌표를 불러온다. 
-                reg_loss = tf.compat.v1.losses.huber_loss(gtb, pred_box) # (x,y,w,h) 각 성분에 대해 smoothL1(ti −vi)한 값을 다 더한게 나온다. 
-        
-            loss = tf.add(cls_loss, reg_loss)
-            loss_list.append(loss) # loss list에 loss를 넣는다.
-
-        return loss_list # 64개의 loss로 이루어진 리스트를 반환
+        return Loss # 64개의 loss로 이루어진 리스트를 반환
     
-    def get_grad(self, image, RoI_list, Reg_labels, Cls_labels, g_num, training_step): 
+    def get_grad(self, image, RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, num_obj_RoI, g_num, training_step): # 중요한 함수
         g_list = []
-
         with tf.GradientTape() as tape:
             
             if training_step == 2 : # conv3_1 ~ 끝까지 훈련
@@ -272,19 +263,22 @@ class Detector(tf.keras.Model):
                 
                 if g_num == 0: # loss about cls
                     tape.watch(self.Classify_layer.variables)
-                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
 
-                    for i in range (0, len(Loss_list)):
-                        g = tape.gradient(Loss_list[i], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
+                    Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) # 계획대로라면 64개의 (1, 21), (1, 84) 텐서를 얻는다 
+                    for i in range(0, len(RoI_minibatch)) :
+                        Loss = self.multi_task_loss(Classify_layer_output[i], Reg_layer_output[i], Cls_label_minibatch[i], Reg_label_minibatch[i], num_obj_RoI, i)
+                        g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
                         g_list.append(g)
                             
 
                 elif g_num == 1: # loss about reg
                     tape.watch(self.Reg_layer.variables)
-                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
 
-                    for i in range (0, len(Loss_list)):
-                        g = tape.gradient(Loss_list[i], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
+                    Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) 
+                    for i in range(0, len(RoI_minibatch)) :
+                        Loss = self.multi_task_loss(Classify_layer_output[i], Reg_layer_output[i], Cls_label_minibatch[i], Reg_label_minibatch[i], num_obj_RoI, i)
+
+                        g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
                         g_list.append(g)
 
             elif training_step == 4 : # Detector만 훈련
@@ -292,24 +286,29 @@ class Detector(tf.keras.Model):
 
                 if g_num == 0: # loss about cls
                     tape.watch(self.Classify_layer.variables)
-                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
 
-                    for i in range (0, len(Loss_list)):
-                        g = tape.gradient(Loss_list[i], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
+                    Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) 
+                    for i in range(0, len(RoI_minibatch)) :
+                        Loss = self.multi_task_loss(Classify_layer_output[i], Reg_layer_output[i], Cls_label_minibatch[i], Reg_label_minibatch[i], num_obj_RoI, i)
+                        g = tape.gradient(Loss, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]])
                         g_list.append(g)
                             
                 elif g_num == 1: # loss about reg
                     tape.watch(self.Reg_layer.variables)
-                    Loss_list = self.multi_task_loss(image, RoI_list, Reg_labels, Cls_labels)
+                    Classify_layer_output, Reg_layer_output = self.call(image, RoI_minibatch) 
+                    for i in range(0, len(RoI_minibatch)) :
 
-                    for i in range (0, len(Loss_list)):
-                        g = tape.gradient(Loss_list[i], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
+                        Loss = self.multi_task_loss(Classify_layer_output[i], Reg_layer_output[i], Cls_label_minibatch[i], Reg_label_minibatch[i], num_obj_RoI, i)
+                        g = tape.gradient(Loss, [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]])
                         g_list.append(g)
         return g_list
     
     def App_Gradient(self, image, RoI_list, Reg_labels, Cls_labels, training_step) :
-        g_cls_list = self.get_grad(image, RoI_list, Reg_labels, Cls_labels, 0, training_step)
-        g_reg_list = self.get_grad(image, RoI_list, Reg_labels, Cls_labels, 1, training_step)
+        
+        RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, num_obj_RoI  = self.get_minibatch(RoI_list, Reg_labels, Cls_labels) # 이미지 당 64개의 미니배치 선별 (128/2 = 64) 
+        
+        g_cls_list = self.get_grad(image, RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, num_obj_RoI, 0, training_step)
+        g_reg_list = self.get_grad(image, RoI_minibatch, Reg_label_minibatch, Cls_label_minibatch, num_obj_RoI, 1, training_step)
         
         if training_step == 2:
             g_cls_total = 0
@@ -318,7 +317,7 @@ class Detector(tf.keras.Model):
             # Detector 훈련
             for i in range(0, len(g_cls_list)):
                 g_cls = g_cls_list[i]
-                g_reg = g_cls_list[i]
+                g_reg = g_reg_list[i]
                 # g_cls는 각 레이어(get_grad()에서 tape.watch를 통해 관찰한 레이어)에 대한 모든 그래디언트가 모여있다. 관찰 명단에 넣은 순서대로 리스트가 정렬 되어있다. 
                 # 맨 뒤에 4개는 Fully_Connected의 가중치와 절편, 제일 마지막 두가지 레이어 중 하나의 가중치와 절편 이렇게 4개에 대한 그래디언트를 말한다. 아래 코드는 맨 마지막 레이어 두개에 그래디언트를 적용하는 코드다.
                 self.Optimizers.apply_gradients(zip(g_cls[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
@@ -340,7 +339,7 @@ class Detector(tf.keras.Model):
             # Detector만 훈련
             for i in range(0, len(g_cls_list)):
                 g_cls = g_cls_list[i]
-                g_reg = g_cls_list[i]
+                g_reg = g_reg_list[i]
                 self.Optimizers.apply_gradients(zip(g_cls[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1]]))
                 self.Optimizers.apply_gradients(zip(g_reg[-4:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
 

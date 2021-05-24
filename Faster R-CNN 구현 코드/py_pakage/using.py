@@ -6,6 +6,14 @@ from util import *
 import tensorflow as tf
 from glob import glob
 
+import warnings , os
+
+warnings.filterwarnings(action='ignore')
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+
 # 데이터셋 생성 
 train_x_path = '/Users/minguinho/Documents/AI_Datasets/PASCAL_VOC_2007/train/VOCdevkit/VOC2007/JPEGImages'
 train_y_path = '/Users/minguinho/Documents/AI_Datasets/PASCAL_VOC_2007/train/VOCdevkit/VOC2007/Annotations'

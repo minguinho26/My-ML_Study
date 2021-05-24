@@ -1,7 +1,9 @@
 # 모델 데이터셋 생성, 훈련에 필요한 함수들을 여기다 모아놨다. 
 
 # 임포트
+import tensorflow as tf
 import numpy as np
+import copy
 import cv2
 import xmltodict
 from tqdm import tqdm
@@ -19,8 +21,38 @@ def make_input(image_file_list):
     
     return np.asarray(images_list)
 
-# 이미지에 어떤 Ground Truth Box가 있는지
-def get_Ground_Truth_Box_fromImage(xml_file_path): # xml_file_path은 파일 하나의 경로를 나타낸다
+def make_anchor(anchor_size, anchor_aspect_ratio) :
+    
+    anchors = [] # [x,y,w,h]로 이루어진 리스트 
+    anchors_state = [] # 이 앵커를 훈련에 쓸건가? 각 앵커별로 사용 여부를 나타낸다. 
+
+    # 앵커 중심좌표 간격
+    interval_x = 16
+    interval_y = 16
+
+    # 2단 while문 생성
+    x = 8
+    y = 8
+    index_count = 0
+    while(y <= 224): # 8~208 = 14개 
+        while(x <= 224): # 8~208 = 14개 
+            # k개의 앵커 생성. 여기서 k = len(anchor_size) * len(anchor_aspect_ratio)다
+            for i in range(0, len(anchor_size)) : 
+                for j in range(0, len(anchor_aspect_ratio)) :
+                    anchor_width = anchor_aspect_ratio[j][0] * anchor_size[i]
+                    anchor_height = anchor_aspect_ratio[j][1] * anchor_size[i]
+
+                    anchor = [x, y, anchor_width, anchor_height]
+                    anchors.append(anchor)
+                    anchors_state.append(1)
+                    
+            x = x + interval_x 
+        y = y + interval_y
+        x = 8
+    return anchors, anchors_state
+
+# 이미지에 어떤 Ground Truth Box가 있는지 + 이미지 크기에 맞춰 앵커 크기도 변형
+def get_Ground_Truth_Box_fromImage(xml_file_path, anchors): # xml_file_path은 파일 하나의 경로를 나타낸다
 
     f = open(xml_file_path)
     xml_file = xmltodict.parse(f.read()) 
@@ -31,7 +63,14 @@ def get_Ground_Truth_Box_fromImage(xml_file_path): # xml_file_path은 파일 하
     Image_Width  = float(xml_file['annotation']['size']['width'])
 
     Ground_Truth_Box_list = [] 
-
+    
+    # 원래 이미지에 128, 256, 512 앵커를 갖다대며 비교하는데 이게 224*224로 변형 -> 줄어든 비율만큼 앵커도 변형
+    anchors_forImage = copy.deepcopy(anchors)
+    for i in range(0, len(anchors)):
+        # 크기만 변형. 좌표는 이미 특성맵(14*14)에 최적화 되어있음
+        anchors_forImage[i][2] = anchors_forImage[i][2] * (224/Image_Width)
+        anchors_forImage[i][3] = anchors_forImage[i][3] * (224/Image_Height)
+        
     # multi-objects in image
     try:
         for obj in xml_file['annotation']['object']:
@@ -72,123 +111,74 @@ def get_Ground_Truth_Box_fromImage(xml_file_path): # xml_file_path은 파일 하
     Ground_Truth_Box_list = np.asarray(Ground_Truth_Box_list)
     Ground_Truth_Box_list = np.reshape(Ground_Truth_Box_list, (-1, 4))
 
-    return Ground_Truth_Box_list # 이미지에 있는 Ground Truth Box 리스트 받기(numpy)
-
-# 앵커 생성 함수. 
-def make_anchor(anchor_size, anchor_aspect_ratio) :
-    # 입력 이미지(그래봤자 224*224긴 하지만)에 맞춰 앵커를 생성해보자 
-
-    anchors = [] # [x,y,w,h]로 이루어진 리스트 
-    anchors_state = [] # 이 앵커를 훈련에 쓸건가? 각 앵커별로 사용 여부를 나타낸다. 
-
-    # 앵커 중심좌표 간격
-    interval_x = 16
-    interval_y = 16
-
-    # 2단 while문 생성
-    x = 8
-    y = 8
-    index_count = 0
-    while(y <= 224): # 8~208 = 14개 
-        while(x <= 224): # 8~208 = 14개 
-            # k개의 앵커 생성. 여기서 k = len(anchor_size) * len(anchor_aspect_ratio)다
-            for i in range(0, len(anchor_size)) : 
-                for j in range(0, len(anchor_aspect_ratio)) :
-                    anchor_width = anchor_aspect_ratio[j][0] * anchor_size[i]
-                    anchor_height = anchor_aspect_ratio[j][1] * anchor_size[i]
-
-                    anchor = [x, y, anchor_width, anchor_height]
-                    anchors.append(anchor)
-                    # 앵커가 이미지 경계선을 넘나드나? 필터링
-                    if((x - (anchor_width/2) >= 0) and (y - (anchor_height/2) >= 0) and
-                    (x + (anchor_width/2) <= 224) and (y + (anchor_height/2) <= 224)):
-                        # 경계 안에 있으면 1
-                        anchors_state.append(int(1))
-                    else :
-                        anchors_state.append(int(0))
-            x = x + interval_x 
-        y = y + interval_y
-        x = 8
-    return np.asarray(anchors), np.asarray(anchors_state) # 넘파이로 반환
-
+    return Ground_Truth_Box_list, anchors_forImage # 이미지에 있는 Ground Truth Box 리스트, WH_ratio_list 받기(numpy)
 
 # 앵커들을 Positive, Negative 앵커로 나누고 각 앵커가 참고한 Ground Truth Box와 Class를 반환하자
 # RPN에는 '어떤 클래스인가?'는 알 필요가 없다. '객체인가 아닌가'이거 하나만 필요할 뿐. 
-def align_anchor(anchors, anchors_state, Ground_Truth_Box_list):
+# 각 이미지에 맞게 최적화된 앵커를 입력값으로 받는다.
+def align_anchor(anchors_for_Image, anchors_state, Ground_Truth_Box_list):
 
     # 각 앵커는 해당 위치에서 구한 여러가지 Ground truth Box와의 ioU 중 제일 높은거만 가져온다. 
-    IoU_List = np.array([])
+    IoU_List = []
     Ground_truth_box_Highest_IoU_List = [] # 각 앵커가 어떤 Ground Truth Box를 보고 IoU를 계산했는가?
 
-    #start = time.time()
+    for i in range(0, len(anchors_for_Image)):
+        
+        IoU_max = 0
+        ground_truth_box_Highest_IoU = [0,0,0,0]
+        
+        anchor_for_thisImage = anchors_for_Image[i]
+        
+        anchor_minX = anchor_for_thisImage[0] - (anchor_for_thisImage[2]/2)
+        anchor_minY = anchor_for_thisImage[1] - (anchor_for_thisImage[3]/2)
+        anchor_maxX = anchor_for_thisImage[0] + (anchor_for_thisImage[2]/2)
+        anchor_maxY = anchor_for_thisImage[1] + (anchor_for_thisImage[3]/2)
+            
+        anchor = [anchor_minX, anchor_minY, anchor_maxX, anchor_maxY]
 
-    for i in range(0, len(anchors)):
-        if anchors_state[i] == 0 :
-            IoU_List = np.append(IoU_List, 0)
-            Ground_truth_box_Highest_IoU_List.append([0,0,0,0])
+        for j in range(0, len(Ground_Truth_Box_list)):
+            
+            ground_truth_box = Ground_Truth_Box_list[j]
 
-            if i % 9 == 8 :
-                IoU_List_inOneSpot = IoU_List[i-8:i+1]
-                for num in list(range(i-8, i + 1)):
-                    if IoU_List[num] > 0.7 or (max(IoU_List_inOneSpot) == IoU_List[num] and IoU_List[num] >= 0.3): # positive anchor
-                        anchors_state[num] = 2
-                    elif IoU_List[num] < 0.3 : # negative anchor
-                        anchors_state[num] = 1
-                    else: # 애매한 앵커들
-                        anchors_state[num] = 0    
-        else:
-            anchor_minX = anchors[i][0] - (anchors[i][2]/2)
-            anchor_minY = anchors[i][1] - (anchors[i][3]/2)
-            anchor_maxX = anchors[i][0] + (anchors[i][2]/2)
-            anchor_maxY = anchors[i][1] + (anchors[i][3]/2)
+            InterSection_min_x = max(anchor[0], ground_truth_box[0])
+            InterSection_min_y = max(anchor[1], ground_truth_box[1])
 
-            anchor = [anchor_minX, anchor_minY, anchor_maxX, anchor_maxY]
+            InterSection_max_x = min(anchor[2], ground_truth_box[2])
+            InterSection_max_y = min(anchor[3], ground_truth_box[3])
 
-            IoU_max = 0
-            ground_truth_box_Highest_IoU = [0,0,0,0]
+            InterSection_Area = 0
 
-            for j in range(0, len(Ground_Truth_Box_list)):
+            if (InterSection_max_x - InterSection_min_x + 1) >= 0 and (InterSection_max_y - InterSection_min_y + 1) >= 0 :
+                InterSection_Area = (InterSection_max_x - InterSection_min_x + 1) * (InterSection_max_y - InterSection_min_y + 1)
 
-                ground_truth_box = Ground_Truth_Box_list[j]
+            box1_area = (anchor[2] - anchor[0]) * (anchor[3] - anchor[1])
+            box2_area = (ground_truth_box[2] - ground_truth_box[0]) * (ground_truth_box[3] - ground_truth_box[1])
+            Union_Area = box1_area + box2_area - InterSection_Area
 
-                InterSection_min_x = max(anchor[0], ground_truth_box[0])
-                InterSection_min_y = max(anchor[1], ground_truth_box[1])
+            IoU = (InterSection_Area/Union_Area)
+            if IoU > IoU_max :
+                IoU_max = IoU
+                ground_truth_box_Highest_IoU = ground_truth_box
 
-                InterSection_max_x = min(anchor[2], ground_truth_box[2])
-                InterSection_max_y = min(anchor[3], ground_truth_box[3])
+        IoU_List.append(IoU_max)
+        Ground_truth_box_Highest_IoU_List.append(ground_truth_box_Highest_IoU)
 
-                InterSection_Area = 0
-
-                if (InterSection_max_x - InterSection_min_x + 1) >= 0 and (InterSection_max_y - InterSection_min_y + 1) >= 0 :
-                    InterSection_Area = (InterSection_max_x - InterSection_min_x + 1) * (InterSection_max_y - InterSection_min_y + 1)
-
-                box1_area = (anchor[2] - anchor[0]) * (anchor[3] - anchor[1])
-                box2_area = (ground_truth_box[2] - ground_truth_box[0]) * (ground_truth_box[3] - ground_truth_box[1])
-                Union_Area = box1_area + box2_area - InterSection_Area
-
-                IoU = (InterSection_Area/Union_Area)
-                if IoU > IoU_max :
-                    IoU_max = IoU
-                    ground_truth_box_Highest_IoU = ground_truth_box
-
-            IoU_List = np.append(IoU_List, IoU_max)
-            Ground_truth_box_Highest_IoU_List.append(ground_truth_box_Highest_IoU)
-
-            # 한 위치에 9개의 앵커 존재 -> 9개 앵커에 대한 IoU를 계산할 때마다 모아서 Positive, Negative 앵커 분류
-            if i % 9 == 8 :
-                IoU_List_inOneSpot = IoU_List[i-8:i+1]
-                for num in list(range(i-8, i + 1)):
-                    if IoU_List[num] > 0.7 or (max(IoU_List_inOneSpot) == IoU_List[num] and IoU_List[num] >= 0.3): # positive anchor
-                        anchors_state[num] = 2
-                    elif IoU_List[num] < 0.3 : # negative anchor
-                        anchors_state[num] = 1
-                    else: # 애매한 앵커들
-                        anchors_state[num] = 0     
+        # 한 위치에 9개의 앵커 존재 -> 9개 앵커에 대한 IoU를 계산할 때마다 모아서 Positive, Negative 앵커 분류
+        if i % 9 == 8 :
+            IoU_List_inOneSpot = IoU_List[i-8:i+1]
+            for num in list(range(i-8, i + 1)):
+                if IoU_List[num] > 0.7 or (max(IoU_List_inOneSpot) == IoU_List[num] and IoU_List[num] >= 0.3): # positive anchor
+                    anchors_state[num] = 2
+                elif IoU_List[num] < 0.3 : # negative anchor
+                    anchors_state[num] = 1
+                else: # 애매한 앵커들
+                    anchors_state[num] = 0     
 
     Ground_truth_box_Highest_IoU_List = np.asarray(Ground_truth_box_Highest_IoU_List)
     Ground_truth_box_Highest_IoU_List = np.reshape(Ground_truth_box_Highest_IoU_List, (-1, 4))
             
     return anchors_state, Ground_truth_box_Highest_IoU_List # 각 앵커의 상태, (모든)앵커가 IoU 계산에 참조한 Ground Truth Box
+
 
 # RPN훈련을 위한 데이터셋. 
 # RPN과 Detector는 별개의 모델이다. 즉, 두 모델을 훈련시킬 때 필요한 데이터셋은 따로따로 만들어야한다. 
@@ -201,114 +191,57 @@ def make_dataset_forRPN(input_list) :
 
     image_list = make_input(image_file_list) # 입력
     # 출력
-    cls_layer_label_list = np.array([])
-    reg_layer_label_list = np.array([])
+    cls_layer_label_list = []
+    reg_layer_label_list = []
+    anchor_optimize_list_forAllImage = []
 
     # 값 계속 생성하는거 막기위한 변수
-    cls_label_forPositive = np.array([1.0,0.0])
-    cls_label_forNegative = np.array([0.0,1.0])
-    cls_label_forUseless  = np.array([0.5,0.5])
-
-    reg_label_forNotPositive = np.array([0.0, 0.0, 0.0, 0.0])
+    cls_label_forPositive = [1.0, 0.0]
+    cls_label_forNegative = [0.0, 1.0]
+    cls_label_forUseless  = [0.5, 0.5]
 
     for i in tqdm(range(0, len(xml_file_list)), desc="get label"): # 각 이미지별로 데이터셋 생성(5011개)
 
-        anchors_state_for = anchors_state # anchors_state는 매 사진마다 다르니까 원본값(?)을 복사해서 쓴다. 
-        Ground_Truth_Box_list = get_Ground_Truth_Box_fromImage(xml_file_list[i]) # 여기서는 Ground Truth Box에 대한 정보만 필요하다
-        anchors_state_for, Ground_truth_box_Highest_IoU_List = align_anchor(anchors, anchors_state_for, Ground_Truth_Box_list)
+        anchors_state_for = copy.deepcopy(anchors_state) # anchors_state는 매 사진마다 다르니까 원본값(?)을 복사해서 쓴다. 
+        Ground_Truth_Box_list, anchors_forImage = get_Ground_Truth_Box_fromImage(xml_file_list[i], anchors) # 여기서는 Ground Truth Box에 대한 정보만 필요하다
+        anchors_state_for, Ground_truth_box_Highest_IoU_List = align_anchor(anchors_forImage, anchors_state, Ground_Truth_Box_list)
         # 어떤 앵커가 Pos, neg 앵커인지, (모든)앵커가 참조한 ground truth box는 뭔지
     
-        #start = time.time()
-        # 연산 시간 때문에 생성(1761개치 모아놨다가 한 번에 추가하기)
-        cls_layer_label_list_for = np.array([])
-        reg_layer_label_list_for = np.array([])
+        anchor_optimize_list_forAllImage.append(anchors_forImage) # 각 이미지에서 224*224로 줄어들 때 변하는 앵커 값을 반환한다
+    
         for j in range(0, len(anchors_state_for)) :
+            
+            gtb_x = Ground_truth_box_Highest_IoU_List[j][0] + Ground_truth_box_Highest_IoU_List[j][2]/2
+            gtb_y = Ground_truth_box_Highest_IoU_List[j][1] + Ground_truth_box_Highest_IoU_List[j][3]/2
+            gtb_w = Ground_truth_box_Highest_IoU_List[j][2] - Ground_truth_box_Highest_IoU_List[j][0]
+            gtb_h = Ground_truth_box_Highest_IoU_List[j][3] - Ground_truth_box_Highest_IoU_List[j][1]
+            Ground_truth_box = [gtb_x, gtb_y, gtb_w, gtb_h]
+            
             if anchors_state_for[j] == 2 : # positive
-                gtb_x = Ground_truth_box_Highest_IoU_List[j][0] + Ground_truth_box_Highest_IoU_List[j][2]/2
-                gtb_y = Ground_truth_box_Highest_IoU_List[j][1] + Ground_truth_box_Highest_IoU_List[j][3]/2
-                gtb_w = Ground_truth_box_Highest_IoU_List[j][2]/2
-                gtb_h = Ground_truth_box_Highest_IoU_List[j][3]/2
-                
-                Ground_truth_box = np.array([gtb_x, gtb_y, gtb_w, gtb_h])
-                cls_layer_label_list_for = np.append(cls_layer_label_list_for, cls_label_forPositive)
-                reg_layer_label_list_for = np.append(reg_layer_label_list_for, Ground_truth_box) # IoU계산에 참조한(pos, neg 분류에 기여한) Ground Truth Box의 정보 휙득
+                # 라벨링을 위해 (min, max)를 (x,y,w,h)로
+                cls_layer_label_list.append(cls_label_forPositive)
+                reg_layer_label_list.append(Ground_truth_box) # IoU계산에 참조한(pos, neg 분류에 기여한) Ground Truth Box의 정보 휙득
             elif anchors_state_for[j] == 1 : # negative는 Ground Truth Box 정보가 필요없으니 [0,0,0,0]을 넣는다. 
-                cls_layer_label_list_for = np.append(cls_layer_label_list_for, cls_label_forNegative) # 해당 앵커 output이 [0,1] -> negative
-                reg_layer_label_list_for = np.append(reg_layer_label_list_for, reg_label_forNotPositive)
+                cls_layer_label_list.append(cls_label_forNegative) # 해당 앵커 output이 [0,1] -> negative
+                reg_layer_label_list.append([0,0,0,0])
             else : 
-                cls_layer_label_list_for = np.append(cls_layer_label_list_for, cls_label_forUseless) # 해당 앵커 output이 [0.5, 0.5] -> 무의미한 값
-                reg_layer_label_list_for = np.append(reg_layer_label_list_for, reg_label_forNotPositive)
-        
-        # 넘파이 배열로 변환
-        cls_layer_label_list = np.append(cls_layer_label_list, cls_layer_label_list_for)
-        reg_layer_label_list = np.append(reg_layer_label_list, reg_layer_label_list_for)
-        #print("\nmaking label time :", time.time() - start)
+                cls_layer_label_list.append(cls_label_forUseless) # 해당 앵커 output이 [0.5, 0.5] -> 무의미한 값
+                reg_layer_label_list.append([0,0,0,0])
 
     # 논문에서 말한 출력값 크기에 맞게 reshape
+    cls_layer_label_list = np.asarray(cls_layer_label_list)
+    reg_layer_label_list = np.asarray(reg_layer_label_list)
+    anchor_optimize_list_forAllImage = np.asarray(anchor_optimize_list_forAllImage)
+    
+    
     cls_layer_label_list = np.reshape(cls_layer_label_list, (-1, 1764, 2)) 
     reg_layer_label_list = np.reshape(reg_layer_label_list, (-1, 1764, 4))
+    
+    anchor_optimize_list_forAllImage = np.reshape(anchor_optimize_list_forAllImage, (-1, 1764, 4))
 
     image_list = image_list.astype('float32')
 
-    return image_list, cls_layer_label_list, reg_layer_label_list # 훈련 데이터들(입, 출력)
-
-# RPN에서 뽑아낸 RoI 명단 중 Object score(내가 뽑은 구역에 물체가 있을거 같다!)가 0.7이상인 RoI들만 Detector의 입력값으로 사용한다. 
-
-def nms(cls_layer_output, reg_layer_output): # 한 이미지 안에 있는 RoI를 선별. (1764,2), (1764,4) 텐서를 받음
-    # 넘파이 배열로 변환
-    cls_layer_output = cls_layer_output.numpy()
-    reg_layer_output = reg_layer_output.numpy()
-
-    nms_RoI_inImage = [] # 한 이미지에 들어있는 RoI 리스트
-
-    for i in range(0, len(cls_layer_output)) :
-        if cls_layer_output[i][0] > 0.7 : # 해당 앵커의 object score가 0.7을 넘겼으면 RoI로 선정. 테스트를 위해 0.6으로
-            nms_RoI_inImage.append(reg_layer_output[i].tolist()) # RoI 추가
-
-    return nms_RoI_inImage # RoI 반환
-
-def get_nms_list(RPN_Model, image_list) :
-    # Detector 훈련에 필요한 데이터를 얻는 곳이다
-
-    NMS_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
-
-    for i in tqdm(range(0, len(RPN_Model)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
-        cls_layer_output, reg_layer_output = RPN_Model(image_list) # output을 얻는다
-
-        nms_RoI_inImage = nms(cls_layer_output, reg_layer_output) # # 각 이미지에서 RoI들 구하기
-        NMS_RoIs_List.append(nms_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
-
-    return NMS_RoIs_List # (5011, list) 리스트를 반환
-
-
-def filtering_nonCrossBoundaryRoI(reg_layer_output): # 한 이미지 내에서 생성된 RoI 중 이미지의 경계선을 넘지 않는 RoI만 선별한다.
-    # 넘파이 배열로 변환
-    reg_layer_output = reg_layer_output.numpy()
-    
-    nonCrossBoundary_RoI_inImage = [] # 한 이미지에 들어있는 RoI 리스트
-
-    for i in range(0, len(reg_layer_output)) :
-        x = reg_layer_output[i][0]
-        y = reg_layer_output[i][1]
-        w = reg_layer_output[i][2]
-        h = reg_layer_output[i][3]
-        if((x - (w/2) >= 0) and (y - (h/2) >= 0) and
-        (x + (w/2) <= 224) and (y + (h/2) <= 224)):
-            nonCrossBoundary_RoI_inImage.append(reg_layer_output[i])
-    return nonCrossBoundary_RoI_inImage # RoI 반환
-
-def get_nonCrossBoundaryRoI_list(RPN_Model, image_list) :
-    # 훈련할 때는 각 이미지의 경계에 걸리는 RoI만 걸러낸다.
-
-    nonCrossBoundary_RoIs_List = [] # 전체 입력 이미지의 RoI를 이미지별로 저장(리스트 안에 리스트)
-
-    for i in tqdm(range(0, len(image_list)), desc = "get_RoI"): # 5011개에 대한 nms 구한다
-        _, reg_layer_output = RPN_Model(np.expand_dims(image_list[i], axis = 0) ) # output을 얻는다
-
-        nonCrossBoundary_RoI_inImage = filtering_nonCrossBoundaryRoI(reg_layer_output) # 각 이미지에서 RoI들 구하기
-        nonCrossBoundary_RoIs_List.append(nonCrossBoundary_RoI_inImage) # 각 이미지에서 얻은 RoI를 넣기
-
-    return nonCrossBoundary_RoIs_List
+    return image_list, cls_layer_label_list, reg_layer_label_list, anchor_optimize_list_forAllImage # 훈련 데이터들(입, 출력)
 
 # 데이터셋에 존재하는 클래스가 얼마나 있는지 알아낸다
 def get_Classes_inImage(xml_file_list):
@@ -332,18 +265,52 @@ def get_Classes_inImage(xml_file_list):
 
     return Classes_inDataSet
 
-def make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
-    # Label List를 받아 데이터셋에 어떤 클래스가 있는지 알아내고 클래스 종류를 받아 이미지별 어떤 클래스가 있는지 Ground Truth Box별로 one-hot encoding을 해서 반환한다
-    # 이미지별 GroundTruthBox도 반환한다
-    num_Classes = len(Classes_inDataSet) # 데이터셋에 클래스가 몇종류인가?
+def get_mns_RoI(cls_output, reg_output):
+    
+    cls_output_np = cls_output.numpy()
 
-    # 클래스 리스트를 알았으니 데이터셋을 만들어보자
-    # 훈련 이미지 5011개 분의 데이터를 얻어야한다
+    mns_RoI_list = []
+    for i in range(0, len(cls_output_np)):
+        if cls_output_np[i][0] > 0.7:
+            mns_RoI_list.append(reg_output[i])
+    
+    return mns_RoI_list
+
+
+def get_nonCrossBoundary_RoI(RPN_Model,image_list, anchor_optimize_list_forAllImage) :
+    
+    nonCrossBoundary_RoI_forAll_Image = []
+    
+    for i in tqdm(range(0, len(image_list)), desc = "get_nonCrossBoundary_RoI") :
+        
+        image = np.expand_dims(image_list[i], axis = 0)
+        _, reg_output = RPN_Model(image, anchor_optimize_list_forAllImage[i])
+        
+        nonCrossBoundary_RoI_inImage = []
+        
+        for j in range(0, len(reg_output)) :
+            x = reg_output[j][0]
+            y = reg_output[j][1]
+            w = reg_output[j][2]
+            h = reg_output[j][3]
+            
+            if((x - (w/2) >= 0) and (y - (h/2) >= 0) and
+            (x + (w/2) <= 224) and (y + (h/2) <= 224)):
+                nonCrossBoundary_RoI_inImage.append(reg_output[j])
+            
+        nonCrossBoundary_RoI_forAll_Image.append(nonCrossBoundary_RoI_inImage)
+        
+    return nonCrossBoundary_RoI_forAll_Image
+
+def make_DataSet_forFastRCNN_Train(xml_file_list, Classes_inDataSet, anchors):
+    # 이미지별 GroundTruthBox도 반환한다    
+
     Cls_labels_for_FastRCNN = []
     Reg_labels_for_FastRCNN = []
-
-    for i in tqdm(range(0, len(xml_file_list)), desc = "get_dataset_forFASTRCNN"):
-        GroundTruthBoxes_inImage = get_Ground_Truth_Box_fromImage(xml_file_list[i]) # 이미지별 Ground Truth Box 리스트. (n, 4)크기의 리스트 받음
+    
+    # 각 이미지에 해당하는 Ground Truth Box이에 맞는  Class 인덱스 추가
+    for i in tqdm(range(0, len(xml_file_list)), desc = "get_dataset_forFAST_RCNN"):
+        GroundTruthBoxes_inImage,_ = get_Ground_Truth_Box_fromImage(xml_file_list[i], anchors) # 이미지별 Ground Truth Box 리스트. (n, 4)크기의 리스트 받음
 
         classes = []
         f = open(xml_file_list[i])
@@ -362,7 +329,7 @@ def make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
         for class_val in classes :
             cls_index = Classes_inDataSet.index(class_val) # 클래스가 Classes_inDataSet 내에서 어떤 인덱스 번호를 갖고 있는가?
             cls_index_list.append(cls_index)# 한 이미지 내에 있는 Ground Truth Box별로 갖고 있는 클래스 인덱스를 저장
-        cls_onehot_inImage = np.eye(len(Classes_inDataSet))[cls_index_list] # (n,21) 크기의 리스트 받음. 여기서 n은 한 이미지 내에 있는 객체 숫자
+        cls_onehot_inImage = np.eye(len(Classes_inDataSet) + 1)[cls_index_list] # (n,21) 크기의 리스트 받음. 여기서 n은 한 이미지 내에 있는 객체 숫자
 
         # 저장
         Reg_labels_for_FastRCNN.append(GroundTruthBoxes_inImage)
@@ -370,19 +337,19 @@ def make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet):
 
     return Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN # 이미지별 Ground Truth Box와 Classes 리스트
 
+
 # 훈련
-def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, xml_file_list, cls_layer_label_list, reg_layer_label_list, Classes_inDataSet, EPOCH): # 두 모델을 받아 훈련시킴
+def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, cls_layer_label_list, reg_layer_label_list, anchor_optimize_list_forAllImage, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, EPOCH): # 두 모델을 받아 훈련시킴
     # 각자 독립된 상태에서 훈련
 
     for i in range(0, EPOCH) : # RPN 훈련
-        RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, 1)
+        RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, anchor_optimize_list_forAllImage,  1)
 
     # 훈련시킨 RPN에서 Detector훈련에 필요한 데이터 휙득
-    nonCrossBoundaryRoIs_List = get_nonCrossBoundaryRoI_list(RPN_Model, image_list)# RoI는 경계선 넘지 않는 것들만
-    Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN = make_DataSet_forFastRCNN(xml_file_list, Classes_inDataSet) # 라벨 데이터
-
+    nonCrossBoundary_RoI_forAll_Image = get_nonCrossBoundary_RoI(RPN_Model, image_list)# RoI는 경계선 넘지 않는 것들만
+    
     for i in range(0, EPOCH) : # Detector 훈련
-        Detector_Model.Training_model(image_list, nonCrossBoundaryRoIs_List, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 2)
+        Detector_Model.Training_model(image_list, nonCrossBoundary_RoI_forAll_Image, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 2)
 
     # Detector_Model의 VGG를 RPN에 이식(레이어 공유 시작)
     RPN_Model.conv1_1 = Detector_Model.conv1_1
@@ -400,9 +367,10 @@ def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, xml_fi
     RPN_Model.conv5_3 = Detector_Model.conv5_3
 
     for i in range(0, EPOCH) : # RPN 훈련
-        RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, 3)
+        RPN_Model.Training_model(image_list, cls_layer_label_list, reg_layer_label_list, anchor_optimize_list_forAllImage,  3)
 
-    NMS_RoIs_List = get_nms_list(RPN_Model, image_list) # 입력 데이터. 새로 훈련한 RPN에서 RoI를 선별한다
+    # 훈련시킨 RPN에서 Detector훈련에 필요한 데이터 휙득
+    nonCrossBoundary_RoI_forAll_Image = get_nonCrossBoundary_RoI(RPN_Model, image_list)# RoI는 경계선 넘지 않는 것들만
 
     # RPN의 VGG16을 Detector의 VGG16 부분에 이식
     Detector_Model.conv1_1 = RPN_Model.conv1_1
@@ -420,41 +388,62 @@ def four_Step_Alternating_Training(RPN_Model, Detector_Model, image_list, xml_fi
     Detector_Model.conv5_3 = RPN_Model.conv5_3
 
     for i in range(0, EPOCH) : # Detector 훈련
-        Detector_Model.Training_model(image_list, NMS_RoIs_List, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 4)
+        Detector_Model.Training_model(image_list, nonCrossBoundary_RoI_forAll_Image, Reg_labels_for_FastRCNN, Cls_labels_for_FastRCNN, 4)
 
     return RPN_Model, Detector_Model
 
 # 값 출력
-def get_FasterRCNN_output(RPN_Model, Detector_Model, Image, Classes_inDataSet) : # Image : 이미지 경로
+def get_FasterRCNN_output(RPN_Model, Detector_Model, Image, Classes_inDataSet, anchors) : # Image : 이미지 경로
+
     image_cv = cv2.imread(Image)
-    image_size = [image_cv[1], image_cv[0]] # 이미지 원래 사이즈를 얻는다. [w, h]
+    height, width,_ = image_cv.shape # 이미지 원래 사이즈를 얻는다. [w, h]
+    image_size = [width, height]
 
     image_cv = cv2.resize(image_cv, (224, 224))/255
     image_cv = np.expand_dims(image_cv, axis = 0)
+
+    image_cv = image_cv.astype('float32')
+
+
+    anchors_forImage = copy.deepcopy(anchors)
+    for i in range(0, len(anchors)):
+        # 크기만 변형. 좌표는 이미 특성맵(14*14)에 최적화 되어있음
+        anchors_forImage[i][2] = anchors_forImage[i][2] * (224/image_size[0])
+        anchors_forImage[i][3] = anchors_forImage[i][3] * (224/image_size[1])
+            
+    cls_output, reg_output = RPN_Model(image_cv, anchors_forImage) # (1764, 2), (1764, 4) 휙득
+
+    mns_RoI_list = get_mns_RoI(cls_output, reg_output)
+
+    Classify_layer_output_list, Reg_layer_output_list = Detector_Model(image_cv, mns_RoI_list)
     
-    cls_output, reg_output = RPN_Model(Image) # (1764, 2), (1764, 4) 휙득
-    nms_RoI_inImage = nms(cls_output, reg_output)
+    # 넘파이로 변환
+    Classify_layer_output_list = Classify_layer_output_list.numpy()
+    Reg_layer_output_list = Classify_layer_output_list.numpy()
 
-    cls_output, reg_layer = Detector_Model(Image, nms_RoI_inImage) # [1,21] 텐서 여러개, [1,84] 텐서 여러개
-    # 넘파이 배열로 변환
-    cls_output = cls_output.numpy()
+    Classify_layer_output_list = np.reshape(Classify_layer_output_list, (-1, len(Classes_inDataSet)))
+    Reg_layer_output_list = np.reshape(Reg_layer_output_list, (-1, 4*len(Classes_inDataSet)))
 
-    # 크기 조정 + 출력
-    im_read = cv2.read(Image)
-    for i in range(0, len(cls_output)):
-        # softmax된 21개의 값 중 가장 큰거 = 예측한 객체 index
-        obj_index = np.argmax(cls_output[i])
-        pred_box_np = (reg_layer[i][4*obj_index:4*obj_index+3]).numpy() # 해당 클래스의 Box정보만 얻고 넘파이 배열로 만든다
-        # 얻은 박스를 원래 이미지 비율에 맞게 바꿔준다. 
-        pred_box_np[0] = pred_box_np[0] * (image_size[2] / 224)
-        pred_box_np[1] = pred_box_np[1] * (image_size[3] / 224)
-        pred_box_np[2] = pred_box_np[2] * (image_size[2] / 224)
-        pred_box_np[3] = pred_box_np[3] * (image_size[3] / 224)
+    im_read = cv2.imread(Image)
 
+    for i in range(0, len(Reg_layer_output_list)) :
+        
+        class_index = np.argmax(Classify_layer_output_list[i]) # 라벨값의 원-핫 인코딩에서 가장 큰 값의 인덱스 = 클래스의 인덱스에 해당. 
+
+        pred_box = [ 
+        Reg_layer_output_list[i][4*class_index],
+        Reg_layer_output_list[i][4*class_index + 1],
+        Reg_layer_output_list[i][4*class_index + 2],
+        Reg_layer_output_list[i][4*class_index + 3]]   
+
+        
         # rectangle함수를 위해 필요한 '박스의 최소 x,y 좌표'와 '박스의 최대 x,y좌표'리스트를 생성한다. 
-        min_box = (round(pred_box_np[0] - pred_box_np[2]/2), round(pred_box_np[1] - pred_box_np[3]/2))
-        max_box = (round(pred_box_np[0] + pred_box_np[2]/2), round(pred_box_np[1] + pred_box_np[3]/2)) 
-        # 이미지에 그리기
-        cv2.rectangle(im_read, min_box, max_box, (255, 0, 0), -1) # 박스 그리기
+        min_box = (int(round(pred_box[2] - pred_box[0]/2)), int(round(pred_box[3] - pred_box[1]/2)))
+        max_box = (int(round(pred_box[2] + pred_box[0]/2)), int(round(pred_box[3] + pred_box[1]/2)))
+        # 출력하기
+        cv2.rectangle(im_read, min_box, max_box, (0, 255, 0), 1) # 박스 그리기
+        show_str = Classes_inDataSet + " : " + str(Classify_layer_output_list[i][class_index])
+        # 글자 넣어주기
+        cv2.putText(im_read, show_str, (min_box[0], min_box[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36,255,12), 2)
 
     cv2.imwrite('output.jpg', im_read)

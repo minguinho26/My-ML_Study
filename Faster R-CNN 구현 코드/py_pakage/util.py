@@ -33,7 +33,6 @@ def make_anchor(anchor_size, anchor_aspect_ratio) :
     # 2단 while문 생성
     x = 8
     y = 8
-    index_count = 0
     while(y <= 224): # 8~208 = 14개 
         while(x <= 224): # 8~208 = 14개 
             # k개의 앵커 생성. 여기서 k = len(anchor_size) * len(anchor_aspect_ratio)다
@@ -120,7 +119,7 @@ def align_anchor(anchors_for_Image, anchors_state, Ground_Truth_Box_list):
 
     # 각 앵커는 해당 위치에서 구한 여러가지 Ground truth Box와의 ioU 중 제일 높은거만 가져온다. 
     IoU_List = []
-    Ground_truth_box_Highest_IoU_List = [] # 각 앵커가 어떤 Ground Truth Box를 보고 IoU를 계산했는가?
+    Ground_truth_box_Highest_IoU_List = [] # 각 앵커가 어떤 Ground Truth Box를 보고 가장 높은 IoU를 계산했는가?
 
     for i in range(0, len(anchors_for_Image)):
         

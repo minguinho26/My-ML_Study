@@ -359,17 +359,29 @@ class Detector(tf.keras.Model):
         if training_step == 2:
             # Detector 훈련
             
-            self.Optimizers.apply_gradients(zip(g[-6:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g[-6:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], 
+                                                        self.Classify_layer.variables[0],self.Classify_layer.variables[1], 
+                                                        self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
                 
             # 모인 그래디언트로 VGG16의 conv3_1부터 5_3까지 훈련시킨다.
             # 평균 * 미니배치 개수 = 전체 loss
             for i in range(0, len(g) - 6) :
                 g[i] = tf.multiply(g[i], minibatch_num)
             
-            self.Optimizers.apply_gradients(zip(g[:-6], [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g[:-6], [self.conv3_1.variables[0], self.conv3_1.variables[1], 
+                                                        self.conv3_2.variables[0],self.conv3_2.variables[1], 
+                                                        self.conv3_3.variables[0],self.conv3_3.variables[1], 
+                                                        self.conv4_1.variables[0],self.conv4_1.variables[1], 
+                                                        self.conv4_2.variables[0],self.conv4_2.variables[1], 
+                                                        self.conv4_3.variables[0],self.conv4_3.variables[1], 
+                                                        self.conv5_1.variables[0],self.conv5_1.variables[1], 
+                                                        self.conv5_2.variables[0],self.conv5_2.variables[1],
+                                                        self.conv5_3.variables[0],self.conv5_3.variables[1]]))
 
         elif training_step == 4:
-            self.Optimizers.apply_gradients(zip(g[-6:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], self.Classify_layer.variables[0],self.Classify_layer.variables[1], self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g[-6:], [self.Fully_Connected.variables[0],self.Fully_Connected.variables[1], 
+                                                        self.Classify_layer.variables[0],self.Classify_layer.variables[1], 
+                                                        self.Reg_layer.variables[0],self.Reg_layer.variables[1]]))
         
         return Loss_mean
         

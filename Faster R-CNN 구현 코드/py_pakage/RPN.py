@@ -247,7 +247,18 @@ class RPN(tf.keras.Model):
                 cls_layer_output, reg_layer_output = self.call(image, anchor_optimize_list)
                 
                 Loss = self.multi_task_loss(cls_layer_output, reg_layer_output ,cls_layer_label, reg_layer_label, minibatch_index_list, anchor_optimize_list)
-                g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]])
+                g = tape.gradient(Loss, [self.conv3_1.variables[0], self.conv3_1.variables[1], 
+                                        self.conv3_2.variables[0],self.conv3_2.variables[1], 
+                                        self.conv3_3.variables[0],self.conv3_3.variables[1], 
+                                        self.conv4_1.variables[0],self.conv4_1.variables[1], 
+                                        self.conv4_2.variables[0],self.conv4_2.variables[1], 
+                                        self.conv4_3.variables[0],self.conv4_3.variables[1], 
+                                        self.conv5_1.variables[0],self.conv5_1.variables[1], 
+                                        self.conv5_2.variables[0],self.conv5_2.variables[1], 
+                                        self.conv5_3.variables[0],self.conv5_3.variables[1], 
+                                        self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], 
+                                        self.cls_layer.variables[0],self.cls_layer.variables[1], 
+                                        self.reg_layer.variables[0],self.reg_layer.variables[1]])
             
             else :
                 tape.watch(self.intermediate_layer.variables)
@@ -257,7 +268,9 @@ class RPN(tf.keras.Model):
                 cls_layer_output, reg_layer_output = self.call(image)
                 
                 Loss = self.multi_task_loss(cls_layer_output, reg_layer_output ,cls_layer_label, reg_layer_label, minibatch_index_list)
-                g = tape.gradient(Loss, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]])
+                g = tape.gradient(Loss, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], 
+                                        self.cls_layer.variables[0],self.cls_layer.variables[1], 
+                                        self.reg_layer.variables[0],self.reg_layer.variables[1]])
 
         return g, Loss
     
@@ -266,9 +279,22 @@ class RPN(tf.keras.Model):
         g, Loss = self.get_grad(image, cls_layer_label, reg_layer_label, anchor_optimize_list, training_step)
         
         if training_step == 1:
-            self.Optimizers.apply_gradients(zip(g, [self.conv3_1.variables[0], self.conv3_1.variables[1], self.conv3_2.variables[0],self.conv3_2.variables[1], self.conv3_3.variables[0],self.conv3_3.variables[1], self.conv4_1.variables[0],self.conv4_1.variables[1], self.conv4_2.variables[0],self.conv4_2.variables[1], self.conv4_3.variables[0],self.conv4_3.variables[1], self.conv5_1.variables[0],self.conv5_2.variables[1], self.conv5_3.variables[0],self.conv5_3.variables[1], self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g, [self.conv3_1.variables[0], self.conv3_1.variables[1], 
+                                                    self.conv3_2.variables[0],self.conv3_2.variables[1], 
+                                                    self.conv3_3.variables[0],self.conv3_3.variables[1], 
+                                                    self.conv4_1.variables[0],self.conv4_1.variables[1], 
+                                                    self.conv4_2.variables[0],self.conv4_2.variables[1], 
+                                                    self.conv4_3.variables[0],self.conv4_3.variables[1], 
+                                                    self.conv5_1.variables[0],self.conv5_1.variables[1],
+                                                    self.conv5_2.variables[0],self.conv5_2.variables[1], 
+                                                    self.conv5_3.variables[0],self.conv5_3.variables[1], 
+                                                    self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], 
+                                                    self.cls_layer.variables[0],self.cls_layer.variables[1], 
+                                                    self.reg_layer.variables[0],self.reg_layer.variables[1]]))
         elif training_step == 3:
-            self.Optimizers.apply_gradients(zip(g, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], self.cls_layer.variables[0],self.cls_layer.variables[1], self.reg_layer.variables[0],self.reg_layer.variables[1]]))
+            self.Optimizers.apply_gradients(zip(g, [self.intermediate_layer.variables[0],self.intermediate_layer.variables[1], 
+                                                    self.cls_layer.variables[0],self.cls_layer.variables[1], 
+                                                    self.reg_layer.variables[0],self.reg_layer.variables[1]]))
         return Loss
     # 모델 훈련
     def Training_model(self, image_list, cls_layer_label_list, reg_layer_label_list, anchor_optimize_list_forAllImage, training_step):

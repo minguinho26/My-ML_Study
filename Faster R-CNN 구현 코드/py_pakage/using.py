@@ -18,8 +18,8 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 train_x_path = '/Users/minguinho/Documents/AI_Datasets/PASCAL_VOC_2007/train/VOCdevkit/VOC2007/JPEGImages'
 train_y_path = '/Users/minguinho/Documents/AI_Datasets/PASCAL_VOC_2007/train/VOCdevkit/VOC2007/Annotations'
 
-image_file_list = sorted([x for x in glob.glob(train_x_path + '/**')])
-xml_file_list = sorted([x for x in glob.glob(train_y_path + '/**')])
+image_file_list = sorted([x for x in glob(train_x_path + '/**')])
+xml_file_list = sorted([x for x in glob(train_y_path + '/**')])
 
 anchor_size = [32, 64, 128] # 이미지 크기가 224*224라 32, 64, 128로 지정
 anchor_aspect_ratio = [[1,1],[1,0.5], [0.5,1]] # W*L기준 

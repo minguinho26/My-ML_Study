@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import os
 import cv2
+import copy
 from glob import glob
 
 # ResNet과 PlainNet(Skip Connection 적용 안한거) 둘다 구현
@@ -71,7 +72,7 @@ class ResNet34(tf.keras.Model):
 
         self.average_pool = tf.keras.layers.GlobalAveragePooling2D()
         self.flatten = tf.keras.layers.Flatten()
-        self.fcn = tf.keras.layers.Dense(1000, activation='softmax') # 분류할 객체 종류가 1000가지
+        self.fcn = tf.keras.layers.Dense(275, activation='softmax')
     
     def calc_Conv(self, input, layer) :
         output = layer(input)
@@ -86,17 +87,16 @@ class ResNet34(tf.keras.Model):
         conv_2 = layer_group[1]
 
         ori_input = 0
-
+    
         if pooling_size == 2 :
             # 크기도 2배로 줄이면서 채널 숫자도 바꿔야 한다
             ori_input = tf.identity(input)
-            #ori_input을 Ws와 곱해 output과 같은 크기가 되도록 해야한다. 나는 이를 reshape로 해결했다.
+            #ori_input을 Ws와 곱해 output과 같은 크기가 되도록 해야한다.
+            
             size_toConvert = tf.shape(ori_input).numpy()
-            size_toConvert[-1] = size_toConvert[-1] * 2
-            ori_input = tf.reshape(ori_input, size_toConvert) # 이게 진짜 될까...?
-
-            # 채널 숫자를 바꿨으니 이제 크기를 줄여보자
-            ori_input = self.maxPooling(ori_input)
+            new_channel = size_toConvert[-1] * 2
+            
+            ori_input = tf.keras.layers.Conv2D(new_channel, 1, strides=(2, 2), padding="same")(ori_input)
         else :
             ori_input = tf.identity(input)
         
@@ -177,8 +177,8 @@ class ResNet34(tf.keras.Model):
             tape.watch(self.fcn.variables)
 
             output = self.call(image)
-
-            loss = tf.keras.losses.CategoricalCrossentropy(label, output)
+            
+            loss = tf.keras.losses.categorical_crossentropy(label, output)
 
             g = tape.gradient(loss, 
                 [self.conv1.variables[0], self.conv1.variables[1],
@@ -214,10 +214,18 @@ class ResNet34(tf.keras.Model):
                 self.conv5_2_2.variables[0], self.conv5_2_2.variables[1],
                 self.conv5_3_1.variables[0], self.conv5_3_1.variables[1],
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
-                self.fcn.variables[0], self.fcn.variables[1]])
+                self.fcn.variables[0], self.fcn.variables[1]]) # fcn에서 에러가 뜬다. 왜지?
 
             return g, loss
-
+    def Plus_grad(self, g_list_1, g_list_2) :
+        for i in range(0, len(g_list_1)) :
+            g_list_1[i] = tf.math.add(g_list_1[i], g_list_2[i])
+        return g_list_1
+    def Div_grad(self, g_list, num) :
+        for i in range(0, len(g_list)) :
+            g_list[i] = tf.math.scalar_mul(1/num, g_list[i])
+        return g_list
+        
     def App_Gradient(self, image_minibatch, label_minibatch, lr = 0.1) :
         # 출력값을 구한다 -> 로스를 구한다 -> 그레디언트를 구한다 -> 적용 시킨다
         total_g = 0
@@ -227,13 +235,15 @@ class ResNet34(tf.keras.Model):
             label = label_minibatch[i]
             g, loss = self.Get_Gradient(image, label)
             if i == 0 :
-                total_g = tf.identity(g)
+                total_g = copy.deepcopy(g) # 그래디언트 '리스트'다
                 total_loss = tf.identity(loss)
             else :
-                total_g = tf.math.add(total_g, g)
+                temp = copy.deepcopy(g)
+                total_g = self.Plus_grad(total_g, g)
                 total_loss = tf.math.add(total_loss, loss)
-        avr_g = tf.math.divide(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
-        avr_loss = tf.math.divide(total_loss, len(image_minibatch))
+                
+        avr_g = self.Div_grad(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
+        avr_loss = total_loss/len(image_minibatch)
 
         self.Optimizers.apply_gradients(zip(avr_g, [
                 self.conv1.variables[0], self.conv1.variables[1],
@@ -283,32 +293,32 @@ class ResNet34(tf.keras.Model):
         temp_label_minibatch = []
 
         bar = tqdm(range(0, len(input_list)), desc = "make minibatch" )
-
         for i in bar :
             temp_input_minibatch.append(input_list[i])
             temp_label_minibatch.append(label_list[i])
             count = count + 1
-            if count == 256 or i == len(input_list):
+            if count % 256 == 0 or i == len(input_list) - 1:
                 input_minibatch_list.append(temp_input_minibatch)
                 label_minibatch_list.append(temp_label_minibatch)
                 temp_input_minibatch = []
                 temp_label_minibatch = []
         
         bar = tqdm(range(0, len(input_minibatch_list)), desc = "training ResNet")
-
+        
         grad_one_epoch = 0
         for i in bar :
             avr_g, avr_loss = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
             if grad_one_epoch == 0 :
-                grad_one_epoch = tf.identity(avr_g)
+                grad_one_epoch = copy.deepcopy(avr_g)
             else :
-                grad_one_epoch = tf.math.add(grad_one_epoch, avr_g)
+                grad_one_epoch = self.Plus_grad(grad_one_epoch, avr_g)
             
             desc_str = "training ResNet, Loss = %f " % avr_loss
             bar.set_description(desc_str)
-        grad_one_epoch = tf.math.divide(grad_one_epoch, len(input_minibatch_list))
+        
+        grad_one_epoch = self.Div_grad(grad_one_epoch, len(input_minibatch_list))
 
-        return grad_one_epoch 
+        return grad_one_epoch
 
 class PlainNet34(tf.keras.Model):
     def __init__(self):
@@ -368,7 +378,7 @@ class PlainNet34(tf.keras.Model):
 
         self.average_pool = tf.keras.layers.GlobalAveragePooling2D()
         self.flatten = tf.keras.layers.Flatten()
-        self.fcn = tf.keras.layers.Dense(1000, activation='softmax') # 분류할 객체 종류가 1000가지
+        self.fcn = tf.keras.layers.Dense(275, activation='softmax')
 
     def calc_Conv(self, input, layer) :
         output = layer(input)
@@ -466,8 +476,8 @@ class PlainNet34(tf.keras.Model):
             tape.watch(self.fcn.variables)
 
             output = self.call(image)
-
-            loss = tf.keras.losses.CategoricalCrossentropy(label, output)
+            
+            loss = tf.keras.losses.categorical_crossentropy(label, output)
 
             g = tape.gradient(loss, 
                 [self.conv1.variables[0], self.conv1.variables[1],
@@ -503,10 +513,18 @@ class PlainNet34(tf.keras.Model):
                 self.conv5_2_2.variables[0], self.conv5_2_2.variables[1],
                 self.conv5_3_1.variables[0], self.conv5_3_1.variables[1],
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
-                self.fcn.variables[0], self.fcn.variables[1]])
+                self.fcn.variables[0], self.fcn.variables[1]]) # fcn에서 에러가 뜬다. 왜지?
 
             return g, loss
-
+    def Plus_grad(self, g_list_1, g_list_2) :
+        for i in range(0, len(g_list_1)) :
+            g_list_1[i] = tf.math.add(g_list_1[i], g_list_2[i])
+        return g_list_1
+    def Div_grad(self, g_list, num) :
+        for i in range(0, len(g_list)) :
+            g_list[i] = tf.math.scalar_mul(1/num, g_list[i])
+        return g_list
+        
     def App_Gradient(self, image_minibatch, label_minibatch, lr = 0.1) :
         # 출력값을 구한다 -> 로스를 구한다 -> 그레디언트를 구한다 -> 적용 시킨다
         total_g = 0
@@ -516,13 +534,15 @@ class PlainNet34(tf.keras.Model):
             label = label_minibatch[i]
             g, loss = self.Get_Gradient(image, label)
             if i == 0 :
-                total_g = tf.identity(g)
+                total_g = copy.deepcopy(g) # 그래디언트 '리스트'다
                 total_loss = tf.identity(loss)
             else :
-                total_g = tf.math.add(total_g, g)
+                temp = copy.deepcopy(g)
+                total_g = self.Plus_grad(total_g, g)
                 total_loss = tf.math.add(total_loss, loss)
-        avr_g = tf.math.divide(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
-        avr_loss = tf.math.divide(total_loss, len(image_minibatch))
+                
+        avr_g = self.Div_grad(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
+        avr_loss = total_loss/len(image_minibatch)
 
         self.Optimizers.apply_gradients(zip(avr_g, [
                 self.conv1.variables[0], self.conv1.variables[1],
@@ -560,7 +580,7 @@ class PlainNet34(tf.keras.Model):
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
                 self.fcn.variables[0], self.fcn.variables[1]]))
 
-        return avr_g, avr_loss # 가중치 확인을 위해 반환
+        return avr_g, avr_loss # 가중치, 로스 확인을 위해 반환
         
 
     def training(self, input_list, label_list) :
@@ -572,30 +592,30 @@ class PlainNet34(tf.keras.Model):
         temp_label_minibatch = []
 
         bar = tqdm(range(0, len(input_list)), desc = "make minibatch" )
-
         for i in bar :
             temp_input_minibatch.append(input_list[i])
             temp_label_minibatch.append(label_list[i])
             count = count + 1
-            if count == 256 or i == len(input_list):
+            if count % 256 == 0 or i == len(input_list) - 1:
                 input_minibatch_list.append(temp_input_minibatch)
                 label_minibatch_list.append(temp_label_minibatch)
                 temp_input_minibatch = []
                 temp_label_minibatch = []
         
         bar = tqdm(range(0, len(input_minibatch_list)), desc = "training ResNet")
-
+        
         grad_one_epoch = 0
         for i in bar :
             avr_g, avr_loss = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
             if grad_one_epoch == 0 :
-                grad_one_epoch = tf.identity(avr_g)
+                grad_one_epoch = copy.deepcopy(avr_g)
             else :
-                grad_one_epoch = tf.math.add(grad_one_epoch, avr_g)
+                grad_one_epoch = self.Plus_grad(grad_one_epoch, avr_g)
             
             desc_str = "training ResNet, Loss = %f " % avr_loss
             bar.set_description(desc_str)
-        grad_one_epoch = tf.math.divide(grad_one_epoch, len(input_minibatch_list))
+        
+        grad_one_epoch = self.Div_grad(grad_one_epoch, len(input_minibatch_list))
 
         return grad_one_epoch 
 

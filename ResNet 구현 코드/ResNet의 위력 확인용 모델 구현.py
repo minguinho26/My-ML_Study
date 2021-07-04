@@ -1,7 +1,10 @@
 import tensorflow as tf
 import math
 import numpy as np
-import tqdm
+from tqdm import tqdm
+import os
+import cv2
+from glob import glob
 
 # ResNet과 PlainNet(Skip Connection 적용 안한거) 둘다 구현
 
@@ -12,7 +15,7 @@ import tqdm
 # 손실 함수 : cross_entropy(tf.nn.softmax_cross_entropy_with_logits)
 class ResNet34(tf.keras.Model):
     def __init__(self):
-        
+        super(ResNet34, self).__init__(name='ResNet34')
         self.Optimizers = tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
 
         # 레이어(논문에 나온 구조 그대로 사용)
@@ -177,8 +180,8 @@ class ResNet34(tf.keras.Model):
 
             loss = tf.keras.losses.CategoricalCrossentropy(label, output)
 
-            g = tape.gradient(
-                self.conv1.variables[0], self.conv1.variables[1],
+            g = tape.gradient(loss, 
+                [self.conv1.variables[0], self.conv1.variables[1],
                 self.conv2_1_1.variables[0], self.conv2_1_1.variables[1], 
                 self.conv2_1_2.variables[0], self.conv2_1_2.variables[1],
                 self.conv2_2_1.variables[0], self.conv2_2_1.variables[1], 
@@ -211,22 +214,26 @@ class ResNet34(tf.keras.Model):
                 self.conv5_2_2.variables[0], self.conv5_2_2.variables[1],
                 self.conv5_3_1.variables[0], self.conv5_3_1.variables[1],
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
-                self.fcn.variables[0], self.fcn.variables[1])
+                self.fcn.variables[0], self.fcn.variables[1]])
 
-            return g
+            return g, loss
 
     def App_Gradient(self, image_minibatch, label_minibatch, lr = 0.1) :
         # 출력값을 구한다 -> 로스를 구한다 -> 그레디언트를 구한다 -> 적용 시킨다
         total_g = 0
+        total_loss = 0
         for i in range(0, len(image_minibatch)) :
-            image = image_minibatch[i]
+            image = np.expand_dims(image_minibatch[i], axis = 0)
             label = label_minibatch[i]
-            g = self.Get_Gradient(image, label)
+            g, loss = self.Get_Gradient(image, label)
             if i == 0 :
                 total_g = tf.identity(g)
+                total_loss = tf.identity(loss)
             else :
                 total_g = tf.math.add(total_g, g)
+                total_loss = tf.math.add(total_loss, loss)
         avr_g = tf.math.divide(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
+        avr_loss = tf.math.divide(total_loss, len(image_minibatch))
 
         self.Optimizers.apply_gradients(zip(avr_g, [
                 self.conv1.variables[0], self.conv1.variables[1],
@@ -264,7 +271,7 @@ class ResNet34(tf.keras.Model):
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
                 self.fcn.variables[0], self.fcn.variables[1]]))
 
-        return avr_g # 가중치 확인을 위해 반환
+        return avr_g, avr_loss # 가중치, 로스 확인을 위해 반환
         
 
     def training(self, input_list, label_list) :
@@ -275,7 +282,7 @@ class ResNet34(tf.keras.Model):
         temp_input_minibatch = []
         temp_label_minibatch = []
 
-        bar = tqdm(range(0, len(input_list), desc = "make minibatch" ))
+        bar = tqdm(range(0, len(input_list)), desc = "make minibatch" )
 
         for i in bar :
             temp_input_minibatch.append(input_list[i])
@@ -287,22 +294,25 @@ class ResNet34(tf.keras.Model):
                 temp_input_minibatch = []
                 temp_label_minibatch = []
         
-        bar = tqdm(range(0, len(input_minibatch_list), desc = "apply grad of minibatch"))
+        bar = tqdm(range(0, len(input_minibatch_list)), desc = "training ResNet")
 
         grad_one_epoch = 0
         for i in bar :
-            avr_g = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
+            avr_g, avr_loss = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
             if grad_one_epoch == 0 :
                 grad_one_epoch = tf.identity(avr_g)
             else :
                 grad_one_epoch = tf.math.add(grad_one_epoch, avr_g)
+            
+            desc_str = "training ResNet, Loss = %f " % avr_loss
+            bar.set_description(desc_str)
         grad_one_epoch = tf.math.divide(grad_one_epoch, len(input_minibatch_list))
 
         return grad_one_epoch 
 
 class PlainNet34(tf.keras.Model):
     def __init__(self):
-        
+        super(PlainNet34, self).__init__(name='PlainNet34')
         self.Optimizers = tf.keras.optimizers.SGD(learning_rate=0.01, momentum=0.9)
 
         # 레이어(논문에 나온 구조 그대로 사용)
@@ -459,8 +469,8 @@ class PlainNet34(tf.keras.Model):
 
             loss = tf.keras.losses.CategoricalCrossentropy(label, output)
 
-            g = tape.gradient(
-                self.conv1.variables[0], self.conv1.variables[1],
+            g = tape.gradient(loss, 
+                [self.conv1.variables[0], self.conv1.variables[1],
                 self.conv2_1_1.variables[0], self.conv2_1_1.variables[1], 
                 self.conv2_1_2.variables[0], self.conv2_1_2.variables[1],
                 self.conv2_2_1.variables[0], self.conv2_2_1.variables[1], 
@@ -493,22 +503,26 @@ class PlainNet34(tf.keras.Model):
                 self.conv5_2_2.variables[0], self.conv5_2_2.variables[1],
                 self.conv5_3_1.variables[0], self.conv5_3_1.variables[1],
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
-                self.fcn.variables[0], self.fcn.variables[1])
+                self.fcn.variables[0], self.fcn.variables[1]])
 
-            return g
+            return g, loss
 
     def App_Gradient(self, image_minibatch, label_minibatch, lr = 0.1) :
         # 출력값을 구한다 -> 로스를 구한다 -> 그레디언트를 구한다 -> 적용 시킨다
         total_g = 0
+        total_loss = 0
         for i in range(0, len(image_minibatch)) :
-            image = image_minibatch[i]
+            image = np.expand_dims(image_minibatch[i], axis = 0)
             label = label_minibatch[i]
-            g = self.Get_Gradient(image, label)
+            g, loss = self.Get_Gradient(image, label)
             if i == 0 :
                 total_g = tf.identity(g)
+                total_loss = tf.identity(loss)
             else :
                 total_g = tf.math.add(total_g, g)
+                total_loss = tf.math.add(total_loss, loss)
         avr_g = tf.math.divide(total_g, len(image_minibatch)) # 미니배치의 평균 gradient를 구한다
+        avr_loss = tf.math.divide(total_loss, len(image_minibatch))
 
         self.Optimizers.apply_gradients(zip(avr_g, [
                 self.conv1.variables[0], self.conv1.variables[1],
@@ -546,7 +560,7 @@ class PlainNet34(tf.keras.Model):
                 self.conv5_3_2.variables[0], self.conv5_3_2.variables[1],
                 self.fcn.variables[0], self.fcn.variables[1]]))
 
-        return avr_g # 가중치 확인을 위해 반환
+        return avr_g, avr_loss # 가중치 확인을 위해 반환
         
 
     def training(self, input_list, label_list) :
@@ -557,7 +571,7 @@ class PlainNet34(tf.keras.Model):
         temp_input_minibatch = []
         temp_label_minibatch = []
 
-        bar = tqdm(range(0, len(input_list), desc = "make minibatch" ))
+        bar = tqdm(range(0, len(input_list)), desc = "make minibatch" )
 
         for i in bar :
             temp_input_minibatch.append(input_list[i])
@@ -569,20 +583,64 @@ class PlainNet34(tf.keras.Model):
                 temp_input_minibatch = []
                 temp_label_minibatch = []
         
-        bar = tqdm(range(0, len(input_minibatch_list), desc = "apply grad of minibatch"))
+        bar = tqdm(range(0, len(input_minibatch_list)), desc = "training ResNet")
 
         grad_one_epoch = 0
         for i in bar :
-            avr_g = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
+            avr_g, avr_loss = self.App_Gradient(input_minibatch_list[i], label_minibatch_list[i]) # 미니배치 단위로 그레디언트 적용
             if grad_one_epoch == 0 :
                 grad_one_epoch = tf.identity(avr_g)
             else :
                 grad_one_epoch = tf.math.add(grad_one_epoch, avr_g)
+            
+            desc_str = "training ResNet, Loss = %f " % avr_loss
+            bar.set_description(desc_str)
         grad_one_epoch = tf.math.divide(grad_one_epoch, len(input_minibatch_list))
 
         return grad_one_epoch 
 
                 
+def preprocessing_Dataset(root_path) : # train - label - data 구조로 이루어진 데이터셋인 경우 데이터셋 내에 있는 파일을 뽑아내고 라벨 데이터도 만들어내는 함수. '/home/ubuntu/CUAI_2021/Advanced_Minkyu_Kim/Bird_Dataset'같은 폴더 경로를 넣어준다.
+    file_list = os.listdir(root_path) # 폴더 내에 있는 파일(폴더 포함)리스트 얻음
+
+    class_idx = 0
+    class_list = [] # 데이터셋 내부에 있는 클래스 종류를 얻는다.
+    image_list = []
+    label_list = []
+
+    bar = tqdm(range(0, len(file_list)), desc = "preprocessing...")
+
+    for i in bar :
+        class_list.append(file_list[i])
+        class_iamges_folder_path = root_path + '/' + file_list[i]
+        class_image_list = sorted([x for x in glob(class_iamges_folder_path + '/**')])
+        for j in range(0, 20) :
+            # 이미지 전처리(사이즈 변경, RGB범위를 0~255 -> 0~1)
+            image = cv2.imread(class_image_list[j])
+            image = cv2.resize(image, (224, 224))/255
+            # one-hot encoding
+            label = np.zeros(len(file_list))
+            label[class_idx] = 1
+
+            image_list.append(image)
+            label_list.append(label)
+        class_idx = class_idx + 1
+
+    image_list = np.asarray(image_list)
+    label_list = np.asarray(label_list)
+    
+    arr_forShuffle = np.arange(image_list.shape[0])
+    np.random.shuffle(arr_forShuffle)
+    
+    image_list = image_list[arr_forShuffle]
+    label_list = label_list[arr_forShuffle]
+
+    image_list = image_list.astype('float32')
+
+    return image_list, label_list, np.asarray(class_list)
+
+
+
 
 
 

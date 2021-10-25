@@ -151,7 +151,6 @@ class RPN(tf.keras.Model):
 
         denominator = tf.math.log(tf.constant(10, dtype=tf.float32)) # 텐서 로그는 ln밖에 없어서 ln10을 구한 뒤 나누는 방식으로 log10을 구한다(로그의 밑변환 공식)
 
-        # 4개만 떼서 계산하니까 잘됨
         t_x = tf.math.divide(tf.subtract(x, x_a), w_a)
         t_y = tf.math.divide(tf.subtract(y, y_a), h_a)
         t_w = tf.math.divide(tf.math.log(tf.math.divide(w, w_a)), denominator)
@@ -181,8 +180,6 @@ class RPN(tf.keras.Model):
         t_y_star_minibatch = tf.math.multiply(t_y_star, minibatch_index_tensor)
         t_w_star_minibatch = tf.math.multiply(t_w_star, minibatch_index_tensor)
         t_h_star_minibatch = tf.math.multiply(t_h_star, minibatch_index_tensor)
-        
-        
         
         t_w_minibatch = tf.where(tf.math.is_nan(t_w_minibatch), tf.zeros_like(t_w_minibatch), t_w_minibatch)
         t_h_minibatch = tf.where(tf.math.is_nan(t_h_minibatch), tf.zeros_like(t_h_minibatch), t_h_minibatch)
